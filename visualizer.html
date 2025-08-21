@@ -86,22 +86,21 @@
     return { size:{length, width, height}, xOffset:container.xOffset };
   }
 
-  // ------------------ DUMMY DATA (contoh isi) ------------------
-  const payload = [
-    {
-      type: "40FT (HQ)",
-      xOffset: 0,
-      items: [
-        {
-          model: "FQ819-1",
-          size: "21",
-          qty: 990,
-          dimensions: { l:634, w:419, h:258 },
-          color: "#b5651d"
-        }
-      ]
-    }
-  ];
+  // ------------------ LISTEN DATA ------------------
+function renderFromData(payload){
+  mainGroup.clear();
+  payload.forEach((cont, idx)=>{
+    const container = drawContainerWireframe(cont, idx);
+    autoPack(container, cont.items);
+  });
+}
+
+// tunggu data dari index.html
+window.addEventListener("message", (event)=>{
+  if(event.data && event.data.type === "renderBoxes"){
+    renderFromData(event.data.payload);
+  }
+});
 
   // ------------------ PACKING ALGORITHM (sederhana shelf) ------------------
   function getAllRotations(dim){
