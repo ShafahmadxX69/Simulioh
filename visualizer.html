@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Container Visualizer – Layer Packing</title>
+  <title>Container Visualizer – No Gap</title>
   <style>
     body { margin: 0; overflow: hidden; font-family: Arial, sans-serif; }
     canvas { display: block; }
@@ -35,7 +35,7 @@
 <body>
   <div id="topbar">
     <button id="btnClearCache">Clear Cache</button>
-    <span>Mode: Layer Packing (Depan penuh dulu, Z=panjang, X=lebar, Y=tinggi)</span>
+    <span>Mode: No Gap (Box pas dengan container)</span>
   </div>
   <div id="report"></div>
   <canvas id="threeCanvas"></canvas>
@@ -43,20 +43,14 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
   <script>
-  // =====================
   // Container Dimensions
-  // =====================
   const containerSizeMap = {
     "20FT (GP)": { length: 5898, width: 2352, height: 2393 },
     "40FT (GP)": { length: 12032, width: 2352, height: 2393 },
     "40FT (HQ)": { length: 12032, width: 2352, height: 2698 }
   };
 
-  const VISUAL_GAP = 2; // hanya visual
-
-  // =====================
-  // THREE.js Setup
-  // =====================
+  // THREE.js setup
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0xffffff);
   const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 1, 100000);
@@ -76,25 +70,25 @@
   const mainGroup = new THREE.Group();
   scene.add(mainGroup);
 
-  // =====================
-  // Utility Functions
-  // =====================
   function withOutline(mesh) {
     const edges = new THREE.EdgesGeometry(mesh.geometry);
     mesh.add(new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: 0x000000 })));
     return mesh;
   }
 
-  function addBox(dim, pos, color) {
-    const geo = new THREE.BoxGeometry(
-      Math.max(1, dim.w - VISUAL_GAP),
-      Math.max(1, dim.h - VISUAL_GAP),
-      Math.max(1, dim.l - VISUAL_GAP)
-    );
+  function addBox(dim, pos, color, containerSize) {
+    // clamp agar tidak melebihi kontainer
+    if (pos.x + dim.w > containerSize.width ||
+        pos.y + dim.h > containerSize.height ||
+        pos.z + dim.l > containerSize.length) {
+      return; // skip box ini
+    }
+
+    // Box sesuai ukuran asli (tanpa gap)
+    const geo = new THREE.BoxGeometry(dim.w, dim.h, dim.l);
     const mat = new THREE.MeshStandardMaterial({ color: new THREE.Color(color), opacity: 0.97 });
     const box = new THREE.Mesh(geo, mat);
-    // Orientasi: Z=panjang, X=lebar, Y=tinggi
-    box.position.set(pos.x + dim.w / 2, pos.y + dim.h / 2, pos.z + dim.l / 2);
+    box.position.set(pos.x + dim.w/2, pos.y + dim.h/2, pos.z + dim.l/2);
     withOutline(box);
     mainGroup.add(box);
   }
@@ -111,77 +105,54 @@
     ];
   }
 
-  // =====================
-  // Packing Logic (Layer First)
-  // =====================
   function packContainer(c) {
     const size = containerSizeMap[c.type];
 
-    // Kontainer Wireframe
     const wireGeo = new THREE.BoxGeometry(size.width, size.height, size.length);
     const wire = new THREE.LineSegments(new THREE.EdgesGeometry(wireGeo), new THREE.LineBasicMaterial({ color: 0x000000 }));
-    wire.position.set(size.width / 2, size.height / 2, size.length / 2);
+    wire.position.set(size.width/2, size.height/2, size.length/2);
     mainGroup.add(wire);
 
     const report = [];
-
-    // Mulai dari layer depan → belakang (Z)
     let currentZ = 0;
+
     while (currentZ < size.length) {
-      let layerHeight = size.height;
-      let layerWidth = size.width;
-      let layerLength = Math.min(500, size.length - currentZ); // proses per blok
-
       let filled = false;
-
       for (const it of c.items) {
-        let qty = it.qty;
         const rots = getAllRotations({ l: it.dimensions.length, w: it.dimensions.width, h: it.dimensions.height });
-
         for (const rot of rots) {
-          if (rot.l <= layerLength && rot.w <= layerWidth && rot.h <= layerHeight) {
-            const nx = Math.floor(layerWidth / rot.w);
-            const ny = Math.floor(layerHeight / rot.h);
-            const nz = Math.floor(layerLength / rot.l);
+          if (rot.l <= size.length && rot.w <= size.width && rot.h <= size.height) {
+            const nx = Math.floor(size.width / rot.w);
+            const ny = Math.floor(size.height / rot.h);
+            const nz = Math.floor((size.length - currentZ) / rot.l);
             const count = nx * ny * nz;
             if (count === 0) continue;
 
-            const toPlace = Math.min(count, qty);
+            const toPlace = Math.min(count, it.qty);
             let placedHere = 0;
             for (let y = 0; y < ny; y++) {
               for (let x = 0; x < nx; x++) {
                 for (let z = 0; z < nz; z++) {
                   if (placedHere >= toPlace) break;
-                  const pos = {
-                    x: x * rot.w,
-                    y: y * rot.h,
-                    z: currentZ + z * rot.l
-                  };
-                  // Clamp check
-                  if (pos.x + rot.w <= size.width && pos.y + rot.h <= size.height && pos.z + rot.l <= size.length) {
-                    addBox(rot, pos, it.color || '#888');
-                    placedHere++;
-                    it.qty--;
-                    filled = true;
-                  }
+                  const pos = { x: x * rot.w, y: y * rot.h, z: currentZ + z * rot.l };
+                  addBox(rot, pos, it.color || '#888', size);
+                  placedHere++;
+                  it.qty--;
+                  filled = true;
                 }
               }
             }
-            report.push(`${c.label} - ${it.model} ${it.size}: Placed ${toPlace} / ${qty + toPlace}`);
+            report.push(`${c.label} - ${it.model} ${it.size}: Placed ${toPlace}`);
           }
         }
       }
-
       if (!filled) break;
-      currentZ += layerLength;
+      currentZ += 1000; // maju layer by layer
     }
 
     return report.join('\n');
   }
 
-  // =====================
-  // Render Entry Point
-  // =====================
   function renderContainers(payload) {
     mainGroup.clear();
     const reports = [];
@@ -192,9 +163,7 @@
     document.getElementById('report').textContent = reports.join('\n\n');
   }
 
-  window.addEventListener('message', e => {
-    if (e.data?.type === 'RENDER_CONTAINER') renderContainers(e.data.payload);
-  });
+  window.addEventListener('message', e => { if (e.data?.type === 'RENDER_CONTAINER') renderContainers(e.data.payload); });
 
   document.getElementById('btnClearCache').addEventListener('click', () => {
     localStorage.clear();
