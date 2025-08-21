@@ -24,7 +24,7 @@
   <script>
   // ------------------ CONFIG ------------------
   const GAP = 0;       // fisik: box nempel dinding/lantai/plafon
-  const VIS_GAP = 2;   // visualisasi: supaya kotak ada garis pembeda
+  const VIS_GAP = 2;   // visualisasi: garis antar box
 
   const containerSizeMap = {
     "20FT (GP)": { length: 5898,  width: 2352, height: 2393 },
@@ -98,7 +98,7 @@
     ];
   }
 
-  // ------------------ AUTO PACK ------------------
+  // ------------------ AUTO PACK (simple shelf) ------------------
   function autoPack(container, items){
     const size = container.size;
     let y = 0;
@@ -137,8 +137,12 @@
 
   // ------------------ WAIT FOR INDEX.HTML ------------------
   window.addEventListener("message", (event)=>{
-    if(event.data && event.data.type === "renderBoxes"){
-      renderFromData(event.data.payload);
+    if(event.data){
+      if(event.data.type === "renderBoxes" && event.data.payload){
+        renderFromData(event.data.payload);   // format baru
+      } else if (Array.isArray(event.data)) {
+        renderFromData(event.data);           // format lama
+      }
     }
   });
 
