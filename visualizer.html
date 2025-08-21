@@ -116,7 +116,7 @@
   }
 
   // ------------------ PACKING (Guillotine heuristic) ------------------
-// ------------------ PACKING (Guillotine heuristic + Tangga) ------------------
+// ------------------ PACKING (Tangga Conditional, Anti-leak) ------------------
 function packContainer(container){
   const size = containerSizeMap[container.type];
   const xOffset = container.index===0 ? 0
@@ -136,6 +136,7 @@ function packContainer(container){
   })).sort((a,b)=> (b.dims.l*b.dims.w*b.dims.h) - (a.dims.l*a.dims.w*a.dims.h));
 
   const report = [];
+  const VISUAL_GAP = 1; // supaya garis box tidak menempel ke garis container
 
   for(const it of items){
     let remaining = it.qty | 0; if(!remaining) continue;
@@ -165,19 +166,26 @@ function packContainer(container){
       const toPlace = Math.min(blockCount, remaining);
 
       let placedHere = 0;
+      const stairMode = blockCount < (Math.floor(size.length/bestRot.l) * Math.floor(size.width/bestRot.w) * Math.floor(size.height/bestRot.h));
+
       outer: for(let y=0;y<ny;y++){           // bawah ke atas
-        for(let x=0;x<nx;x++){                // depan ke belakang (UTAMA)
+        for(let x=0;x<nx;x++){                // depan ke belakang
           for(let z=0;z<nz;z++){              // kiri ke kanan
             if(placedHere>=toPlace) break outer;
 
-            // efek tangga: tiap layer Y geser ke belakang setengah panjang box
-            const xStairOffset = y * (bestRot.l / 2);
+            let xStairOffset = 0;
+            if(stairMode) xStairOffset = y * (bestRot.l / 2);
 
-            addBox(bestRot, {
-              x: s.x + x*(bestRot.l + LOGIC_GAP) + xStairOffset,
-              y: s.y + y*(bestRot.h + LOGIC_GAP),
-              z: s.z + z*(bestRot.w + LOGIC_GAP)
-            }, it.color || '#888', xOffset);
+            const posX = s.x + x*(bestRot.l + LOGIC_GAP) + xStairOffset + VISUAL_GAP;
+            const posY = s.y + y*(bestRot.h + LOGIC_GAP) + VISUAL_GAP;
+            const posZ = s.z + z*(bestRot.w + LOGIC_GAP) + VISUAL_GAP;
+
+            // Clamp: jangan sampai lewat container
+            if(posX + bestRot.l > size.length || posZ + bestRot.w > size.width || posY + bestRot.h > size.height){
+              continue;
+            }
+
+            addBox(bestRot, { x:posX, y:posY, z:posZ }, it.color || '#888', xOffset);
 
             placed++; placedHere++; remaining--;
           }
