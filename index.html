@@ -116,26 +116,26 @@
       });
     }
     function saveData() {
-      const enrichedData = containers.map(c => ({
-        type: containerTypes[c.type].label,
-        items: c.items.map(item => {
-          const match = modelLibrary.find(m => m.model === item.model && m.size === item.size);
-          return {
-            ...item,
-            dimensions: match ? {
-              length: match.length,
-              width: match.width,
-              height: match.height
-            } : { length: 0, width: 0, height: 0 }
-          };
-        })
-      }));
-      const iframe = document.querySelector("iframe");
-      iframe.contentWindow.postMessage({
-        type: "RENDER_CONTAINER",
-        payload: enrichedData
-      }, "*");
-    }
+  const enrichedData = containers.map(c => ({
+    type: containerTypes[c.type].label,
+    items: c.items.map(item => {
+      const match = modelLibrary.find(m => m.model === item.model && m.size === item.size);
+      return {
+        ...item,
+        dimensions: match ? {
+          length: match.length,
+          width: match.width,
+          height: match.height
+        } : { length: 1, width: 1, height: 1 } // ← default kecil biar tetap tampil
+      };
+    })
+  }));
+  const iframe = document.querySelector("iframe");
+  iframe.contentWindow.postMessage({
+    type: "RENDER_CONTAINER",
+    payload: enrichedData
+  }, "*");
+}
     render();
   </script>
 </body>
