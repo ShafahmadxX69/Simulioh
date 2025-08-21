@@ -23,8 +23,8 @@
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
   <script>
   // ------------------ CONFIG ------------------
-  const GAP = 0;       // perhitungan fisik (nol → box nempel dinding, lantai, plafon)
-  const VIS_GAP = 2;   // hanya untuk visualisasi kotak agar terlihat ada garis
+  const GAP = 0;       // fisik: box nempel dinding/lantai/plafon
+  const VIS_GAP = 2;   // visualisasi: supaya kotak ada garis pembeda
 
   const containerSizeMap = {
     "20FT (GP)": { length: 5898,  width: 2352, height: 2393 },
@@ -40,7 +40,6 @@
 
   const renderer = new THREE.WebGLRenderer({ canvas: document.querySelector('#threeCanvas'), antialias: true });
   renderer.setSize(window.innerWidth, window.innerHeight);
-  document.body.appendChild(renderer.domElement);
 
   const controls = new THREE.OrbitControls(camera, renderer.domElement);
   controls.target.set(6000,1500,1200);
@@ -68,7 +67,9 @@
       Math.max(1, dim.h - VIS_GAP),
       Math.max(1, dim.w - VIS_GAP)
     );
-    const material = new THREE.MeshStandardMaterial({ color: new THREE.Color(color), transparent:false, opacity:0.95 });
+    const material = new THREE.MeshStandardMaterial({
+      color: new THREE.Color(color), transparent:false, opacity:0.95
+    });
     const box = new THREE.Mesh(geometry, material);
     box.position.set(pos[0], pos[1], pos[2]);
     box.userData.key = key;
@@ -86,23 +87,6 @@
     return { size:{length, width, height}, xOffset:container.xOffset };
   }
 
-  // ------------------ LISTEN DATA ------------------
-function renderFromData(payload){
-  mainGroup.clear();
-  payload.forEach((cont, idx)=>{
-    const container = drawContainerWireframe(cont, idx);
-    autoPack(container, cont.items);
-  });
-}
-
-// tunggu data dari index.html
-window.addEventListener("message", (event)=>{
-  if(event.data && event.data.type === "renderBoxes"){
-    renderFromData(event.data.payload);
-  }
-});
-
-  // ------------------ PACKING ALGORITHM (sederhana shelf) ------------------
   function getAllRotations(dim){
     return [
       { l:dim.l, w:dim.w, h:dim.h },
@@ -114,6 +98,7 @@ window.addEventListener("message", (event)=>{
     ];
   }
 
+  // ------------------ AUTO PACK ------------------
   function autoPack(container, items){
     const size = container.size;
     let y = 0;
@@ -141,8 +126,8 @@ window.addEventListener("message", (event)=>{
     }
   }
 
-  // ------------------ MAIN ------------------
-  function render(){
+  // ------------------ MAIN RENDER ------------------
+  function renderFromData(payload){
     mainGroup.clear();
     payload.forEach((cont, idx)=>{
       const container = drawContainerWireframe(cont, idx);
@@ -150,7 +135,12 @@ window.addEventListener("message", (event)=>{
     });
   }
 
-  render();
+  // ------------------ WAIT FOR INDEX.HTML ------------------
+  window.addEventListener("message", (event)=>{
+    if(event.data && event.data.type === "renderBoxes"){
+      renderFromData(event.data.payload);
+    }
+  });
 
   function animate(){
     requestAnimationFrame(animate);
