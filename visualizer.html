@@ -149,60 +149,53 @@ function packContainer(container){
       if(cap>bestCap){ bestCap = cap; bestRot = r; }
     }
 
-    while(remaining>0){
-      let si = -1;
-      for(let i=0;i<spaces.length;i++){
-        const s = spaces[i];
-        if(s.l>=bestRot.l && s.w>=bestRot.w && s.h>=bestRot.h){ si=i; break; }
-      }
-      if(si===-1) break;
-      const s = spaces.splice(si,1)[0];
+    while(remaining > 0){
+  let placedThisRound = false;
+
+  for(let si=0; si<spaces.length && remaining>0; si++){
+    const s = spaces[si];
+    if(s.l>=bestRot.l && s.w>=bestRot.w && s.h>=bestRot.h){
+      // gunakan ruang ini
+      spaces.splice(si,1);
 
       const nx = Math.floor(s.l / (bestRot.l + LOGIC_GAP));
       const ny = Math.floor(s.h / (bestRot.h + LOGIC_GAP));
       const nz = Math.floor(s.w / (bestRot.w + LOGIC_GAP));
       const blockCount = nx*ny*nz;
-      if(blockCount===0) continue;
       const toPlace = Math.min(blockCount, remaining);
 
       let placedHere = 0;
-      const stairMode = blockCount < (Math.floor(size.length/bestRot.l) * Math.floor(size.width/bestRot.w) * Math.floor(size.height/bestRot.h));
-
-      outer: for(let y=0;y<ny;y++){           // bawah ke atas
-        for(let x=0;x<nx;x++){                // depan ke belakang
-          for(let z=0;z<nz;z++){              // kiri ke kanan
+      outer: for(let y=0;y<ny;y++){
+        for(let x=0;x<nx;x++){
+          for(let z=0;z<nz;z++){
             if(placedHere>=toPlace) break outer;
-
-            let xStairOffset = 0;
-            if(stairMode) xStairOffset = y * (bestRot.l / 2);
-
-            const posX = s.x + x*(bestRot.l + LOGIC_GAP) + xStairOffset + VISUAL_GAP;
+            const posX = s.x + x*(bestRot.l + LOGIC_GAP) + VISUAL_GAP;
             const posY = s.y + y*(bestRot.h + LOGIC_GAP) + VISUAL_GAP;
             const posZ = s.z + z*(bestRot.w + LOGIC_GAP) + VISUAL_GAP;
-
-            // Clamp: jangan sampai lewat container
-            if(posX + bestRot.l > size.length || posZ + bestRot.w > size.width || posY + bestRot.h > size.height){
+            if(posX+bestRot.l>size.length || posY+bestRot.h>size.height || posZ+bestRot.w>size.width){
               continue;
             }
-
-            addBox(bestRot, { x:posX, y:posY, z:posZ }, it.color || '#888', xOffset);
-
-            placed++; placedHere++; remaining--;
+            addBox(bestRot, {x:posX,y:posY,z:posZ}, it.color || '#888', xOffset);
+            placed++; placedHere++; remaining--; placedThisRound = true;
           }
         }
       }
 
+      // potong ruang sisa
       const usedL = Math.min(nx*bestRot.l, s.l);
       const usedH = Math.min(ny*bestRot.h, s.h);
       const usedW = Math.min(nz*bestRot.w, s.w);
+      const right = { x:s.x+usedL, y:s.y, z:s.z, l:s.l-usedL, h:usedH, w:usedW };
+      const front = { x:s.x, y:s.y, z:s.z+usedW, l:usedL, h:usedH, w:s.w-usedW };
+      const top   = { x:s.x, y:s.y+usedH, z:s.z, l:s.l, h:s.h-usedH, w:s.w };
+      for(const sp of [right, front, top]) if(sp.l>0&&sp.w>0&&sp.h>0) spaces.push(sp);
 
-      const right = { x:s.x + usedL, y:s.y, z:s.z, l:s.l - usedL, h:usedH, w:usedW };
-      const front = { x:s.x, y:s.y, z:s.z + usedW, l:usedL, h:usedH, w:s.w - usedW };
-      const top   = { x:s.x, y:s.y + usedH, z:s.z, l:s.l, h:s.h - usedH, w:s.w };
-      for(const sp of [right, front, top]){
-        if(sp.l>0 && sp.h>0 && sp.w>0) spaces.push(sp);
-      }
+      si--; // supaya cek lagi ruang berikutnya setelah splice
     }
+  }
+
+  if(!placedThisRound) break; // tidak bisa place lagi → stop
+}
 
     report.push(`${container.label} — ${it.model} ${it.size} → Placed: ${placed} | Failed: ${Math.max(0,(it.qty|0)-placed)}`);
   }
