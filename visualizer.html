@@ -1,186 +1,234 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Container Visualizer – No Gap</title>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Container Visualizer – Perfect Packing</title>
   <style>
-    body { margin: 0; overflow: hidden; font-family: Arial, sans-serif; }
-    canvas { display: block; }
-    #report {
-      position: absolute;
-      left: 0; right: 0; bottom: 0;
-      background: #ffffffcc;
-      max-height: 35%;
-      overflow: auto;
-      font-size: 12px;
-      font-family: monospace;
-      padding: 6px;
-      white-space: pre-wrap;
+    :root{
+      --panel-bg:#f7f7f8; --border:#d8d8de;
+      --mono:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;
     }
-    #topbar {
-      position: absolute;
-      top: 0; left: 0; right: 0;
-      height: 40px;
-      background: #fff;
-      display: flex;
-      align-items: center;
-      padding: 0 8px;
-      gap: 8px;
-      border-bottom: 1px solid #ccc;
-      z-index: 10;
-    }
+    *{box-sizing:border-box}
+    body{margin:0;overflow:hidden;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}
+    canvas{display:block}
+    #sidebar{position:absolute;inset:0 auto 0 0;width:280px;background:var(--panel-bg);border-right:1px solid var(--border);z-index:10;padding:12px;overflow:auto}
+    #sidebar h3{margin:0 0 8px}
+    .containerBox{background:#fff;border:1px solid var(--border);border-radius:10px;padding:10px;margin-bottom:10px}
+    .muted{color:#666;font-size:12px}
+    .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+    .tag{border:1px solid var(--border);border-radius:999px;padding:2px 8px;font-size:12px;background:#fff}
+    #reportContainer{position:absolute;left:280px;right:0;bottom:0;background:rgba(255,255,255,0.96);border-top:2px solid #000;z-index:5;font-family:var(--mono);font-size:12px;max-height:35%;overflow:auto;display:flex;flex-wrap:wrap;gap:8px;padding:8px}
+    .reportBox{border:1px solid var(--border);background:#fff;border-radius:8px;padding:10px;white-space:pre-wrap;flex:1 1 280px}
+    #topbar{position:absolute;left:280px;right:0;top:0;height:46px;background:rgba(255,255,255,0.9);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;padding:0 10px;z-index:8;backdrop-filter:blur(4px)}
+    #topbar button,#topbar select{border:1px solid var(--border);background:#fff;padding:6px 10px;border-radius:8px;cursor:pointer;font-size:13px}
+    #topbar .spacer{flex:1}
+    #legend{font-family:var(--mono);font-size:11px;color:#444}
   </style>
 </head>
 <body>
-  <div id="topbar">
-    <button id="btnClearCache">Clear Cache</button>
-    <span>Mode: No Gap (Box pas dengan container)</span>
+  <div id="sidebar">
+    <h3>Container List</h3>
+    <div id="containerList"></div>
+    <div id="legend" class="muted">
+      <p><strong>Legend:</strong></p>
+      <p>- X: depan → belakang (panjang)<br>
+         - Y: lantai → atas (tinggi)<br>
+         - Z: kiri → kanan (lebar)</p>
+      <p>- GAP visual: 2 mm</p>
+    </div>
   </div>
-  <div id="report"></div>
+
+  <div id="topbar">
+    <button id="btnClearCache" title="Hapus cache lokal">Clear Cache</button>
+    <label class="muted">Mode: Auto Packing</label>
+    <div class="spacer"></div>
+    <span class="muted">Tip: kirim payload via <code>postMessage</code> → { type:"RENDER_CONTAINER", payload }</span>
+  </div>
+
+  <div id="reportContainer"></div>
   <canvas id="threeCanvas"></canvas>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
   <script>
-  // Container Dimensions
+  // ------------------ CONFIG ------------------
+  const LOGIC_GAP = 0;   // gap hitungan kapasitas (nol)
+  const VISUAL_GAP = 2;  // gap render visual
+
   const containerSizeMap = {
     "20FT (GP)": { length: 5898, width: 2352, height: 2393 },
     "40FT (GP)": { length: 12032, width: 2352, height: 2393 },
     "40FT (HQ)": { length: 12032, width: 2352, height: 2698 }
   };
 
-  // THREE.js setup
+  // ------------------ THREE SETUP ------------------
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0xffffff);
-  const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 1, 100000);
+  const camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 1, 100000);
   camera.position.set(9000, 6000, 9000);
 
   const renderer = new THREE.WebGLRenderer({ canvas: document.querySelector('#threeCanvas'), antialias: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(window.innerWidth, window.innerHeight);
+
   const controls = new THREE.OrbitControls(camera, renderer.domElement);
-  controls.enableDamping = true;
+  controls.enableDamping = true; controls.dampingFactor = 0.08;
 
-  const amb = new THREE.AmbientLight(0xffffff, 0.9);
-  scene.add(amb);
-  const dir = new THREE.DirectionalLight(0xffffff, 0.6);
-  dir.position.set(1, 2, 1);
-  scene.add(dir);
+  const ambient = new THREE.AmbientLight(0xffffff, 0.9); scene.add(ambient);
+  const dir = new THREE.DirectionalLight(0xffffff, 0.6); dir.position.set(1,2,1); scene.add(dir);
 
-  const mainGroup = new THREE.Group();
-  scene.add(mainGroup);
+  const mainGroup = new THREE.Group(); scene.add(mainGroup);
+  let containerOffsets = [], data = [];
 
-  function withOutline(mesh) {
+  function clearScene(){ mainGroup.clear(); }
+
+  function withOutline(mesh, color = 0x000000){
     const edges = new THREE.EdgesGeometry(mesh.geometry);
-    mesh.add(new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: 0x000000 })));
-    return mesh;
+    const line  = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color }));
+    mesh.add(line); return mesh;
   }
 
-  function addBox(dim, pos, color, containerSize) {
-    // clamp agar tidak melebihi kontainer
-    if (pos.x + dim.w > containerSize.width ||
-        pos.y + dim.h > containerSize.height ||
-        pos.z + dim.l > containerSize.length) {
-      return; // skip box ini
-    }
-
-    // Box sesuai ukuran asli (tanpa gap)
-    const geo = new THREE.BoxGeometry(dim.w, dim.h, dim.l);
-    const mat = new THREE.MeshStandardMaterial({ color: new THREE.Color(color), opacity: 0.97 });
-    const box = new THREE.Mesh(geo, mat);
-    box.position.set(pos.x + dim.w/2, pos.y + dim.h/2, pos.z + dim.l/2);
-    withOutline(box);
+  function addBox(dim, pos, color, xOffset){
+    const geometry = new THREE.BoxGeometry(
+      Math.max(1, dim.l - VISUAL_GAP),
+      Math.max(1, dim.h - VISUAL_GAP),
+      Math.max(1, dim.w - VISUAL_GAP)
+    );
+    const material = new THREE.MeshStandardMaterial({ color: new THREE.Color(color), transparent:false, opacity:0.97 });
+    const box = new THREE.Mesh(geometry, material);
+    box.position.set(pos.x + dim.l/2 + xOffset, pos.y + dim.h/2, pos.z + dim.w/2);
+    withOutline(box, 0x111111);
     mainGroup.add(box);
   }
 
-  function getAllRotations(d) {
-    const L = d.length ?? d.l, W = d.width ?? d.w, H = d.height ?? d.h;
-    return [
-      { l: L, w: W, h: H },
-      { l: L, w: H, h: W },
-      { l: W, w: L, h: H },
-      { l: W, w: H, h: L },
-      { l: H, w: L, h: W },
-      { l: H, w: W, h: L }
+  function getAllRotations(dim){
+    const L = dim.length ?? dim.l, W = dim.width ?? dim.w, H = dim.height ?? dim.h;
+    const perms = [
+      {l:L,w:W,h:H},{l:L,w:H,h:W},
+      {l:W,w:L,h:H},{l:W,w:H,h:L},
+      {l:H,w:L,h:W},{l:H,w:W,h:L}
     ];
+    const uniq = new Set(); const out=[];
+    for(const p of perms){ const k=`${p.l}|${p.w}|${p.h}`; if(!uniq.has(k)){ uniq.add(k); out.push(p); } }
+    out.sort((a,b)=> (a.h-b.h) || ((b.l*b.w)-(a.l*a.w)) );
+    return out;
   }
 
-  function packContainer(c) {
-    const size = containerSizeMap[c.type];
+  // ------------------ PACKING (Guillotine heuristic) ------------------
+  function packContainer(container){
+    const size = containerSizeMap[container.type];
+    const xOffset = container.index===0 ? 0
+      : containerOffsets[container.index-1] + containerSizeMap[data[container.index-1].type].length + 500;
+    containerOffsets[container.index] = xOffset + size.length;
 
-    const wireGeo = new THREE.BoxGeometry(size.width, size.height, size.length);
-    const wire = new THREE.LineSegments(new THREE.EdgesGeometry(wireGeo), new THREE.LineBasicMaterial({ color: 0x000000 }));
-    wire.position.set(size.width/2, size.height/2, size.length/2);
+    const wireGeo = new THREE.BoxGeometry(size.length, size.height, size.width);
+    const wire = new THREE.LineSegments(new THREE.EdgesGeometry(wireGeo), new THREE.LineBasicMaterial({color:0x000000}));
+    wire.position.set(xOffset + size.length/2, size.height/2, size.width/2);
     mainGroup.add(wire);
 
+    let spaces = [{ x:0, y:0, z:0, l:size.length, h:size.height, w:size.width }];
+
+    const items = container.items.map(it=>({
+      ...it,
+      dims: { l: it.dimensions.length, w: it.dimensions.width, h: it.dimensions.height }
+    })).sort((a,b)=> (b.dims.l*b.dims.w*b.dims.h) - (a.dims.l*a.dims.w*a.dims.h));
+
     const report = [];
-    let currentZ = 0;
 
-    while (currentZ < size.length) {
-      let filled = false;
-      for (const it of c.items) {
-        const rots = getAllRotations({ l: it.dimensions.length, w: it.dimensions.width, h: it.dimensions.height });
-        for (const rot of rots) {
-          if (rot.l <= size.length && rot.w <= size.width && rot.h <= size.height) {
-            const nx = Math.floor(size.width / rot.w);
-            const ny = Math.floor(size.height / rot.h);
-            const nz = Math.floor((size.length - currentZ) / rot.l);
-            const count = nx * ny * nz;
-            if (count === 0) continue;
+    for(const it of items){
+      let remaining = it.qty | 0; if(!remaining) continue;
+      let placed = 0;
+      const rots = getAllRotations(it.dims);
+      let bestRot = rots[0];
+      let bestCap = 0;
+      for(const r of rots){
+        const cap = Math.floor(size.length/r.l)*Math.floor(size.width/r.w)*Math.floor(size.height/r.h);
+        if(cap>bestCap){ bestCap = cap; bestRot = r; }
+      }
 
-            const toPlace = Math.min(count, it.qty);
-            let placedHere = 0;
-            for (let y = 0; y < ny; y++) {
-              for (let x = 0; x < nx; x++) {
-                for (let z = 0; z < nz; z++) {
-                  if (placedHere >= toPlace) break;
-                  const pos = { x: x * rot.w, y: y * rot.h, z: currentZ + z * rot.l };
-                  addBox(rot, pos, it.color || '#888', size);
-                  placedHere++;
-                  it.qty--;
-                  filled = true;
-                }
-              }
+      while(remaining>0){
+        let si = -1;
+        for(let i=0;i<spaces.length;i++){
+          const s = spaces[i];
+          if(s.l>=bestRot.l && s.w>=bestRot.w && s.h>=bestRot.h){ si=i; break; }
+        }
+        if(si===-1) break;
+        const s = spaces.splice(si,1)[0];
+
+        const nx = Math.floor(s.l / (bestRot.l + LOGIC_GAP));
+        const ny = Math.floor(s.h / (bestRot.h + LOGIC_GAP));
+        const nz = Math.floor(s.w / (bestRot.w + LOGIC_GAP));
+        const blockCount = nx*ny*nz;
+        if(blockCount===0) continue;
+        const toPlace = Math.min(blockCount, remaining);
+
+        let placedHere = 0;
+        outer: for(let y=0;y<ny;y++){           // bawah ke atas
+          for(let z=0;z<nz;z++){                // kiri ke kanan
+            for(let x=0;x<nx;x++){              // depan ke belakang
+              if(placedHere>=toPlace) break outer;
+              addBox(bestRot, {
+                x: s.x + x*(bestRot.l + LOGIC_GAP),
+                y: s.y + y*(bestRot.h + LOGIC_GAP),
+                z: s.z + z*(bestRot.w + LOGIC_GAP)
+              }, it.color || '#888', xOffset);
+              placed++; placedHere++; remaining--;
             }
-            report.push(`${c.label} - ${it.model} ${it.size}: Placed ${toPlace}`);
           }
         }
+
+        const usedL = Math.min(nx*bestRot.l, s.l);
+        const usedH = Math.min(ny*bestRot.h, s.h);
+        const usedW = Math.min(nz*bestRot.w, s.w);
+
+        const right = { x:s.x + usedL, y:s.y, z:s.z, l:s.l - usedL, h:usedH, w:usedW };
+        const front = { x:s.x, y:s.y, z:s.z + usedW, l:usedL, h:usedH, w:s.w - usedW };
+        const top   = { x:s.x, y:s.y + usedH, z:s.z, l:s.l, h:s.h - usedH, w:s.w };
+        for(const sp of [right, front, top]){
+          if(sp.l>0 && sp.h>0 && sp.w>0) spaces.push(sp);
+        }
       }
-      if (!filled) break;
-      currentZ += 1000; // maju layer by layer
+
+      report.push(`${container.label} — ${it.model} ${it.size} → Placed: ${placed} | Failed: ${Math.max(0,(it.qty|0)-placed)}`);
     }
 
     return report.join('\n');
   }
 
-  function renderContainers(payload) {
-    mainGroup.clear();
+  function renderContainers(payload){
+    clearScene(); containerOffsets = []; data = payload.map((c,i)=>({...c, index:i, label:`C${i+1}`}));
     const reports = [];
-    payload.forEach((c, i) => {
-      c.label = `C${i + 1}`;
-      reports.push(packContainer(c));
-    });
-    document.getElementById('report').textContent = reports.join('\n\n');
+    for(const c of data){ reports.push(packContainer(c)); }
+    showReport(reports.join('\n\n'));
   }
 
-  window.addEventListener('message', e => { if (e.data?.type === 'RENDER_CONTAINER') renderContainers(e.data.payload); });
+  function showReport(text){
+    const el = document.getElementById('reportContainer');
+    el.innerHTML = '';
+    const box = document.createElement('div');
+    box.className = 'reportBox';
+    box.textContent = text || '—';
+    el.appendChild(box);
+  }
 
-  document.getElementById('btnClearCache').addEventListener('click', () => {
-    localStorage.clear();
-    alert('Cache cleared');
+  window.addEventListener('message', (event)=>{
+    if(event?.data?.type === 'RENDER_CONTAINER'){
+      try{ renderContainers(event.data.payload); }
+      catch(e){ console.error(e); showReport('Error: '+e.message); }
+    }
   });
 
-  window.addEventListener('resize', () => {
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    camera.aspect = window.innerWidth / window.innerHeight;
-    camera.updateProjectionMatrix();
-  });
+  document.getElementById('btnClearCache').addEventListener('click', ()=>{ localStorage.clear(); alert('Cache cleared'); });
 
-  (function anim() {
-    requestAnimationFrame(anim);
-    controls.update();
-    renderer.render(scene, camera);
-  })();
+  function onResize(){
+    const w = window.innerWidth, h = window.innerHeight;
+    renderer.setSize(w,h); camera.aspect = w/h; camera.updateProjectionMatrix();
+  }
+  window.addEventListener('resize', onResize);
+
+  function animate(){ requestAnimationFrame(animate); controls.update(); renderer.render(scene, camera); }
+  animate();
   </script>
 </body>
 </html>
