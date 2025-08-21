@@ -115,27 +115,29 @@
         containerDiv.appendChild(box);
       });
     }
+
+    // ✅ Fix: fallback ukuran default agar box baru tetap muncul
     function saveData() {
-  const enrichedData = containers.map(c => ({
-    type: containerTypes[c.type].label,
-    items: c.items.map(item => {
-      const match = modelLibrary.find(m => m.model === item.model && m.size === item.size);
-      return {
-        ...item,
-        dimensions: match ? {
-          length: match.length,
-          width: match.width,
-          height: match.height
-        } : { length: 1, width: 1, height: 1 } // ← default kecil biar tetap tampil
-      };
-    })
-  }));
-  const iframe = document.querySelector("iframe");
-  iframe.contentWindow.postMessage({
-    type: "RENDER_CONTAINER",
-    payload: enrichedData
-  }, "*");
-}
+      const enrichedData = containers.map(c => ({
+        type: containerTypes[c.type].label,
+        items: c.items.map(item => {
+          const match = modelLibrary.find(m => m.model === item.model && m.size === item.size);
+          return {
+            ...item,
+            dimensions: match ? {
+              length: match.length,
+              width: match.width,
+              height: match.height
+            } : { length: 100, width: 100, height: 100 } // fallback
+          };
+        })
+      }));
+      const iframe = document.querySelector("iframe");
+      iframe.contentWindow.postMessage({
+        type: "RENDER_CONTAINER",
+        payload: enrichedData
+      }, "*");
+    }
     render();
   </script>
 </body>
