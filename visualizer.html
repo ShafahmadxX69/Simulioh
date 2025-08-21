@@ -1,20 +1,41 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Container Visualizer – Warehouse Mode</title>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Container Visualizer – Layer Packing</title>
   <style>
-    body{margin:0;overflow:hidden;font-family:system-ui,Segoe UI,Arial,sans-serif}
-    canvas{display:block}
-    #report{position:absolute;left:0;right:0;bottom:0;background:#fff9;max-height:35%;overflow:auto;font-size:12px;font-family:monospace;padding:6px;white-space:pre-wrap}
-    #topbar{position:absolute;top:0;left:0;right:0;height:40px;background:#fff;display:flex;align-items:center;padding:0 8px;gap:8px;border-bottom:1px solid #ccc;z-index:10}
+    body { margin: 0; overflow: hidden; font-family: Arial, sans-serif; }
+    canvas { display: block; }
+    #report {
+      position: absolute;
+      left: 0; right: 0; bottom: 0;
+      background: #ffffffcc;
+      max-height: 35%;
+      overflow: auto;
+      font-size: 12px;
+      font-family: monospace;
+      padding: 6px;
+      white-space: pre-wrap;
+    }
+    #topbar {
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 40px;
+      background: #fff;
+      display: flex;
+      align-items: center;
+      padding: 0 8px;
+      gap: 8px;
+      border-bottom: 1px solid #ccc;
+      z-index: 10;
+    }
   </style>
 </head>
 <body>
   <div id="topbar">
     <button id="btnClearCache">Clear Cache</button>
-    <span>Mode: Warehouse Packing (Z = panjang, X = lebar, Y = tinggi)</span>
+    <span>Mode: Layer Packing (Depan penuh dulu, Z=panjang, X=lebar, Y=tinggi)</span>
   </div>
   <div id="report"></div>
   <canvas id="threeCanvas"></canvas>
@@ -22,118 +43,175 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
   <script>
-  // Dimensions (internal, mm)
+  // =====================
+  // Container Dimensions
+  // =====================
   const containerSizeMap = {
     "20FT (GP)": { length: 5898, width: 2352, height: 2393 },
     "40FT (GP)": { length: 12032, width: 2352, height: 2393 },
     "40FT (HQ)": { length: 12032, width: 2352, height: 2698 }
   };
 
-  const LOGIC_GAP = 0;   // no capacity gap
-  const VISUAL_GAP = 2;  // visual gap
+  const VISUAL_GAP = 2; // hanya visual
 
+  // =====================
+  // THREE.js Setup
+  // =====================
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0xffffff);
-  const camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 1, 100000);
-  camera.position.set(9000,6000,9000);
+  const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 1, 100000);
+  camera.position.set(9000, 6000, 9000);
 
-  const renderer = new THREE.WebGLRenderer({canvas:document.querySelector('#threeCanvas'),antialias:true});
-  renderer.setSize(window.innerWidth,window.innerHeight);
+  const renderer = new THREE.WebGLRenderer({ canvas: document.querySelector('#threeCanvas'), antialias: true });
+  renderer.setSize(window.innerWidth, window.innerHeight);
   const controls = new THREE.OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
 
-  const amb = new THREE.AmbientLight(0xffffff,0.9); scene.add(amb);
-  const dir = new THREE.DirectionalLight(0xffffff,0.6); dir.position.set(1,2,1); scene.add(dir);
+  const amb = new THREE.AmbientLight(0xffffff, 0.9);
+  scene.add(amb);
+  const dir = new THREE.DirectionalLight(0xffffff, 0.6);
+  dir.position.set(1, 2, 1);
+  scene.add(dir);
 
-  const mainGroup = new THREE.Group(); scene.add(mainGroup);
+  const mainGroup = new THREE.Group();
+  scene.add(mainGroup);
 
-  function withOutline(mesh){
+  // =====================
+  // Utility Functions
+  // =====================
+  function withOutline(mesh) {
     const edges = new THREE.EdgesGeometry(mesh.geometry);
-    mesh.add(new THREE.LineSegments(edges,new THREE.LineBasicMaterial({color:0x000000}))); return mesh;
-  }
-  function addBox(dim,pos,color,xOffset=0){
-    const geo=new THREE.BoxGeometry(Math.max(1,dim.l-VISUAL_GAP),Math.max(1,dim.h-VISUAL_GAP),Math.max(1,dim.w-VISUAL_GAP));
-    const mat=new THREE.MeshStandardMaterial({color:new THREE.Color(color),opacity:0.97,transparent:false});
-    const box=new THREE.Mesh(geo,mat);
-    // orientasi: Z = panjang, X = lebar, Y = tinggi
-    box.position.set(pos.x+dim.w/2,pos.y+dim.h/2,pos.z+dim.l/2);
-    withOutline(box); mainGroup.add(box);
+    mesh.add(new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: 0x000000 })));
+    return mesh;
   }
 
-  function getAllRotations(d){
-    const L=d.length??d.l,W=d.width??d.w,H=d.height??d.h;
+  function addBox(dim, pos, color) {
+    const geo = new THREE.BoxGeometry(
+      Math.max(1, dim.w - VISUAL_GAP),
+      Math.max(1, dim.h - VISUAL_GAP),
+      Math.max(1, dim.l - VISUAL_GAP)
+    );
+    const mat = new THREE.MeshStandardMaterial({ color: new THREE.Color(color), opacity: 0.97 });
+    const box = new THREE.Mesh(geo, mat);
+    // Orientasi: Z=panjang, X=lebar, Y=tinggi
+    box.position.set(pos.x + dim.w / 2, pos.y + dim.h / 2, pos.z + dim.l / 2);
+    withOutline(box);
+    mainGroup.add(box);
+  }
+
+  function getAllRotations(d) {
+    const L = d.length ?? d.l, W = d.width ?? d.w, H = d.height ?? d.h;
     return [
-      {l:L,w:W,h:H}, {l:L,w:H,h:W},
-      {l:W,w:L,h:H}, {l:W,w:H,h:L},
-      {l:H,w:L,h:W}, {l:H,w:W,h:L}
+      { l: L, w: W, h: H },
+      { l: L, w: H, h: W },
+      { l: W, w: L, h: H },
+      { l: W, w: H, h: L },
+      { l: H, w: L, h: W },
+      { l: H, w: W, h: L }
     ];
   }
 
-  function packContainer(c){
-    const size=containerSizeMap[c.type];
-    const wireGeo=new THREE.BoxGeometry(size.width,size.height,size.length);
-    const wire=new THREE.LineSegments(new THREE.EdgesGeometry(wireGeo),new THREE.LineBasicMaterial({color:0x000000}));
-    wire.position.set(size.width/2,size.height/2,size.length/2);
+  // =====================
+  // Packing Logic (Layer First)
+  // =====================
+  function packContainer(c) {
+    const size = containerSizeMap[c.type];
+
+    // Kontainer Wireframe
+    const wireGeo = new THREE.BoxGeometry(size.width, size.height, size.length);
+    const wire = new THREE.LineSegments(new THREE.EdgesGeometry(wireGeo), new THREE.LineBasicMaterial({ color: 0x000000 }));
+    wire.position.set(size.width / 2, size.height / 2, size.length / 2);
     mainGroup.add(wire);
 
-    let spaces=[{x:0,y:0,z:0,w:size.width,h:size.height,l:size.length}];
-    const items=c.items.map(it=>({...it,dims:{l:it.dimensions.length,w:it.dimensions.width,h:it.dimensions.height}}));
-    const report=[];
+    const report = [];
 
-    for(const it of items){
-      let qty=it.qty,placed=0;
-      const rots=getAllRotations(it.dims);
-      while(qty>0){
-        let si=-1; let rot=null;
-        for(let i=0;i<spaces.length;i++){
-          for(const r of rots){
-            if(spaces[i].w>=r.w && spaces[i].h>=r.h && spaces[i].l>=r.l){
-              si=i; rot=r; break;
-            }
-          }
-          if(si!==-1) break;
-        }
-        if(si===-1) break;
-        const s=spaces.splice(si,1)[0];
-        const nx=Math.floor(s.w/(rot.w+LOGIC_GAP));
-        const ny=Math.floor(s.h/(rot.h+LOGIC_GAP));
-        const nz=Math.floor(s.l/(rot.l+LOGIC_GAP));
-        const count=nx*ny*nz;
-        if(count===0) continue;
-        const toPlace=Math.min(count,qty);
+    // Mulai dari layer depan → belakang (Z)
+    let currentZ = 0;
+    while (currentZ < size.length) {
+      let layerHeight = size.height;
+      let layerWidth = size.width;
+      let layerLength = Math.min(500, size.length - currentZ); // proses per blok
 
-        let placedHere=0;
-        for(let y=0;y<ny;y++){
-          for(let x=0;x<nx;x++){
-            for(let z=0;z<nz;z++){
-              if(placedHere>=toPlace) break;
-              addBox(rot,{x:s.x+x*rot.w,y:s.y+y*rot.h,z:s.z+z*rot.l},it.color||'#888');
-              placed++;qty--;placedHere++;
+      let filled = false;
+
+      for (const it of c.items) {
+        let qty = it.qty;
+        const rots = getAllRotations({ l: it.dimensions.length, w: it.dimensions.width, h: it.dimensions.height });
+
+        for (const rot of rots) {
+          if (rot.l <= layerLength && rot.w <= layerWidth && rot.h <= layerHeight) {
+            const nx = Math.floor(layerWidth / rot.w);
+            const ny = Math.floor(layerHeight / rot.h);
+            const nz = Math.floor(layerLength / rot.l);
+            const count = nx * ny * nz;
+            if (count === 0) continue;
+
+            const toPlace = Math.min(count, qty);
+            let placedHere = 0;
+            for (let y = 0; y < ny; y++) {
+              for (let x = 0; x < nx; x++) {
+                for (let z = 0; z < nz; z++) {
+                  if (placedHere >= toPlace) break;
+                  const pos = {
+                    x: x * rot.w,
+                    y: y * rot.h,
+                    z: currentZ + z * rot.l
+                  };
+                  // Clamp check
+                  if (pos.x + rot.w <= size.width && pos.y + rot.h <= size.height && pos.z + rot.l <= size.length) {
+                    addBox(rot, pos, it.color || '#888');
+                    placedHere++;
+                    it.qty--;
+                    filled = true;
+                  }
+                }
+              }
             }
+            report.push(`${c.label} - ${it.model} ${it.size}: Placed ${toPlace} / ${qty + toPlace}`);
           }
         }
-        const usedW=nx*rot.w,usedH=ny*rot.h,usedL=nz*rot.l;
-        const right={x:s.x+usedW,y:s.y,z:s.z,w:s.w-usedW,h:usedH,l:usedL};
-        const front={x:s.x,y:s.y,z:s.z+usedL,w:usedW,h:usedH,l:s.l-usedL};
-        const top={x:s.x,y:s.y+usedH,z:s.z,w:s.w,h:s.h-usedH,l:s.l};
-        for(const sp of [right,front,top]) if(sp.w>0&&sp.h>0&&sp.l>0) spaces.push(sp);
       }
-      report.push(`${c.label} - ${it.model} ${it.size}: Placed ${placed} / ${it.qty}`);
+
+      if (!filled) break;
+      currentZ += layerLength;
     }
+
     return report.join('\n');
   }
 
-  function renderContainers(payload){
+  // =====================
+  // Render Entry Point
+  // =====================
+  function renderContainers(payload) {
     mainGroup.clear();
-    const reports=[];
-    payload.forEach((c,i)=>{c.label=`C${i+1}`;reports.push(packContainer(c));});
-    document.getElementById('report').textContent=reports.join('\n\n');
+    const reports = [];
+    payload.forEach((c, i) => {
+      c.label = `C${i + 1}`;
+      reports.push(packContainer(c));
+    });
+    document.getElementById('report').textContent = reports.join('\n\n');
   }
 
-  window.addEventListener('message',e=>{if(e.data?.type==='RENDER_CONTAINER')renderContainers(e.data.payload)});
-  document.getElementById('btnClearCache').addEventListener('click',()=>{localStorage.clear();alert('Cache cleared')});
-  window.addEventListener('resize',()=>{renderer.setSize(window.innerWidth,window.innerHeight);camera.aspect=window.innerWidth/window.innerHeight;camera.updateProjectionMatrix()});
-  (function anim(){requestAnimationFrame(anim);controls.update();renderer.render(scene,camera)})();
+  window.addEventListener('message', e => {
+    if (e.data?.type === 'RENDER_CONTAINER') renderContainers(e.data.payload);
+  });
+
+  document.getElementById('btnClearCache').addEventListener('click', () => {
+    localStorage.clear();
+    alert('Cache cleared');
+  });
+
+  window.addEventListener('resize', () => {
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+  });
+
+  (function anim() {
+    requestAnimationFrame(anim);
+    controls.update();
+    renderer.render(scene, camera);
+  })();
   </script>
 </body>
 </html>
