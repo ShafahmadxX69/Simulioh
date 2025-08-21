@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Container Stuffing UI</title>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="manifest" href="manifest.json" />
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('sw.js');
+    }
+  </script>
+</head>
+<body>
+  <div class="container">
+    <aside class="sidebar">
+      <h2>Container List</h2>
+      <button onclick="addContainer()">+ Add Container</button>
+      <div id="containers"></div>
+      <button class="full-button" onclick="saveData()">🚚 Save to Visualizer</button>
+    </aside>
+    <main class="main-view">
+      <iframe src="visualizer.html" width="100%" height="100%" style="border:0;"></iframe>
+    </main>
+  </div>
+
+  <script>
+    let containers = [{ type: '20GP', items: [] }];
+    let modelLibrary = [
+      { model: "FQ803", size: "20", length: 385, width: 255, height: 576 },
+      { model: "FQ803", size: "21", length: 440, width: 255, height: 570 },
+      { model: "FQ803", size: "29", length: 537, width: 300, height: 789 },
+      { model: "FQ803", size: "24", length: 461, width: 295, height: 686 },
+      { model: "FL688", size: "16", length: 375, width: 245, height: 422 },
+      { model: "FL688", size: "17", length: 435, width: 245, height: 422 },
+      { model: "FL688", size: "21", length: 421, width: 255, height: 566 },
+      { model: "FL688", size: "24", length: 461, width: 295, height: 686 },
+      { model: "FL688", size: "19", length: 424, width: 242, height: 577 },
+      { model: "FL688", size: "29", length: 537, width: 300, height: 789 },
+      { model: "FL688", size: "20", length: 385, width: 255, height: 576 },
+      { model: "FL688", size: "31", length: 411, width: 350, height: 811 },
+      { model: "FL688", size: "32", length: 581, width: 345, height: 883 },
+      { model: "FL688", size: "29.5", length: 420, width: 385, height: 807 },
+      { model: "FJ616", size: "16", length: 424, width: 228, height: 440 },
+      { model: "FJ616", size: "20", length: 382, width: 262, height: 582 },
+      { model: "FJ616", size: "24", length: 467, width: 285, height: 692 },
+      { model: "FJ616", size: "19.5", length: 415, width: 235, height: 600 },
+      { model: "FJ616", size: "29", length: 522, width: 292, height: 792 },
+      { model: "FJ616", size: "31", length: 400, width: 340, height: 830 },
+      { model: "FJ616", size: "32", length: 558, width: 325, height: 880 },
+      { model: "FQ819-1", size: "21", length: 634, width: 419, height: 258 },
+      { model: "FQ819-1", size: "26", length: 757, width: 469, height: 293 },
+      { model: "FQ819-1", size: "29", length: 845, width: 519, height: 333 },
+    ];
+    const containerTypes = {
+      '20GP': { label: '20FT (GP)' },
+      '40GP': { label: '40FT (GP)' },
+      '40HQ': { label: '40FT (HQ)' }
+    };
+    function addContainer() {
+      containers.push({ type: '20GP', items: [] });
+      render();
+    }
+    function removeContainer(index) {
+      if (confirm("Hapus container ini?")) {
+        containers.splice(index, 1);
+        render();
+      }
+    }
+    function addItem(containerIndex) {
+      containers[containerIndex].items.push({ model: '', size: '', qty: 1, color: '#cccccc' });
+      render();
+    }
+    function removeItem(containerIndex, itemIndex) {
+      containers[containerIndex].items.splice(itemIndex, 1);
+      render();
+    }
+    function updateValue(containerIndex, itemIndex, field, value) {
+      containers[containerIndex].items[itemIndex][field] = field === 'qty' ? parseInt(value) || 0 : value;
+      render();
+    }
+    function updateType(containerIndex, value) {
+      containers[containerIndex].type = value;
+    }
+    function getSizesForModel(model) {
+      return modelLibrary.filter(m => m.model === model).map(m => m.size);
+    }
+    function render() {
+      const containerDiv = document.getElementById('containers');
+      containerDiv.innerHTML = '';
+      containers.forEach((container, ci) => {
+        const box = document.createElement('div');
+        box.className = 'container-box';
+        const options = Object.entries(containerTypes).map(([key, data]) =>
+          `<option value="${key}" ${key === container.type ? 'selected' : ''}>${data.label}</option>`).join('');
+        box.innerHTML = `<h3>Container ${ci + 1}</h3>
+          <label>Type: <select onchange="updateType(${ci}, this.value); render()">${options}</select></label>
+          <button onclick="removeContainer(${ci})">- Remove Container</button>`;
+        container.items.forEach((item, ii) => {
+          const modelOptions = modelLibrary.map(m => m.model).filter((v, i, a) => a.indexOf(v) === i).map(v => `<option value="${v}">`).join('');
+          const sizeOptions = getSizesForModel(item.model).map(v => `<option value="${v}">`).join('');
+          box.innerHTML += `
+            <div class="row">
+              <input list="models-${ci}-${ii}" placeholder="Model" value="${item.model}" onchange="updateValue(${ci}, ${ii}, 'model', this.value)" />
+              <datalist id="models-${ci}-${ii}">${modelOptions}</datalist>
+              <input list="sizes-${ci}-${ii}" placeholder="Size" value="${item.size}" onchange="updateValue(${ci}, ${ii}, 'size', this.value)" />
+              <datalist id="sizes-${ci}-${ii}">${sizeOptions}</datalist>
+              <input type="number" value="${item.qty}" onchange="updateValue(${ci}, ${ii}, 'qty', this.value)" />
+              <input type="color" value="${item.color}" onchange="updateValue(${ci}, ${ii}, 'color', this.value)" />
+              <button onclick="removeItem(${ci}, ${ii})">&times;</button>
+            </div>`;
+        });
+        box.innerHTML += `<button onclick="addItem(${ci})">+ Add List</button>`;
+        containerDiv.appendChild(box);
+      });
+    }
+    function saveData() {
+      const enrichedData = containers.map(c => ({
+        type: containerTypes[c.type].label,
+        items: c.items.map(item => {
+          const match = modelLibrary.find(m => m.model === item.model && m.size === item.size);
+          return {
+            ...item,
+            dimensions: match ? {
+              length: match.length,
+              width: match.width,
+              height: match.height
+            } : { length: 0, width: 0, height: 0 }
+          };
+        })
+      }));
+      const iframe = document.querySelector("iframe");
+      iframe.contentWindow.postMessage({
+        type: "RENDER_CONTAINER",
+        payload: enrichedData
+      }, "*");
+    }
+    render();
+  </script>
+</body>
+</html>
