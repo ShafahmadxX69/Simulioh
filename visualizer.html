@@ -1,220 +1,214 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <title>3D Container Visualizer</title>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Container Visualizer – Perfect Packing</title>
   <style>
-    body, html {
-      margin: 0;
-      padding: 0;
-      overflow: hidden;
-      font-family: sans-serif;
+    :root{
+      --panel-bg:#f7f7f8; --border:#d8d8de;
+      --mono:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;
     }
-    #reportContainer {
-      position: absolute;
-      top: 10px;
-      left: 10px;
-      max-width: 320px;
-      max-height: 95%;
-      overflow: auto;
-      padding: 8px;
-      background: rgba(255,255,255,0.9);
-      font-size: 13px;
-      line-height: 1.4em;
-      border: 1px solid #ccc;
-      border-radius: 4px;
-    }
-    .reportBox {
-      white-space: pre-line;
-      font-family: monospace;
-    }
-    #btnClearCache {
-      position: absolute;
-      top: 10px;
-      right: 10px;
-      padding: 6px 10px;
-      font-size: 12px;
-      cursor: pointer;
-    }
+    *{box-sizing:border-box}
+    body{margin:0;overflow:hidden;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}
+    canvas{display:block}
+    #sidebar{position:absolute;inset:0 auto 0 0;width:280px;background:var(--panel-bg);border-right:1px solid var(--border);z-index:10;padding:12px;overflow:auto}
+    #sidebar h3{margin:0 0 8px}
+    .containerBox{background:#fff;border:1px solid var(--border);border-radius:10px;padding:10px;margin-bottom:10px}
+    .muted{color:#666;font-size:12px}
+    .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+    .tag{border:1px solid var(--border);border-radius:999px;padding:2px 8px;font-size:12px;background:#fff}
+    #reportContainer{position:absolute;left:280px;right:0;bottom:0;background:rgba(255,255,255,0.96);border-top:2px solid #000;z-index:5;font-family:var(--mono);font-size:12px;max-height:35%;overflow:auto;display:flex;flex-wrap:wrap;gap:8px;padding:8px}
+    .reportBox{border:1px solid var(--border);background:#fff;border-radius:8px;padding:10px;white-space:pre-wrap;flex:1 1 280px}
+    #topbar{position:absolute;left:280px;right:0;top:0;height:46px;background:rgba(255,255,255,0.9);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;padding:0 10px;z-index:8;backdrop-filter:blur(4px)}
+    #topbar button,#topbar select{border:1px solid var(--border);background:#fff;padding:6px 10px;border-radius:8px;cursor:pointer;font-size:13px}
+    #topbar .spacer{flex:1}
+    #legend{font-family:var(--mono);font-size:11px;color:#444}
   </style>
 </head>
 <body>
+  <div id="sidebar">
+    <h3>Container List</h3>
+    <div id="containerList"></div>
+    <div id="legend" class="muted">
+      <p><strong>Legend:</strong></p>
+      <p>- X: depan → belakang (panjang)<br>
+         - Y: lantai → atas (tinggi)<br>
+         - Z: kiri → kanan (lebar)</p>
+      <p>- GAP visual: 2 mm</p>
+    </div>
+  </div>
+
+  <div id="topbar">
+    <button id="btnClearCache" title="Hapus cache lokal">Clear Cache</button>
+    <label class="muted">Mode: Auto Packing</label>
+    <div class="spacer"></div>
+    <span class="muted">Tip: kirim payload via <code>postMessage</code> → { type:"RENDER_CONTAINER", payload }</span>
+  </div>
+
   <div id="reportContainer"></div>
-  <button id="btnClearCache">Clear Cache</button>
-  <script src="https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/three@0.161.0/examples/js/controls/OrbitControls.js"></script>
+  <canvas id="threeCanvas"></canvas>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
   <script>
-    let scene = new THREE.Scene();
-    scene.background = new THREE.Color(0xffffff);
-    let camera = new THREE.PerspectiveCamera(45, window.innerWidth/window.innerHeight, 1, 100000);
-    camera.position.set(5000, 3000, 5000);
+  const LOGIC_GAP = 0;
+  const VISUAL_GAP = 2;
 
-    let renderer = new THREE.WebGLRenderer({antialias:true});
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    document.body.appendChild(renderer.domElement);
+  const containerSizeMap = {
+    "20FT (GP)": { length: 5898, width: 2352, height: 2393 },
+    "40FT (GP)": { length: 12032, width: 2352, height: 2393 },
+    "40FT (HQ)": { length: 12032, width: 2352, height: 2698 }
+  };
 
-    let controls = new THREE.OrbitControls(camera, renderer.domElement);
-    controls.enableDamping = true;
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0xffffff);
+  const camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 1, 100000);
+  camera.position.set(9000, 6000, 9000);
 
-    let ambient = new THREE.AmbientLight(0xffffff, 0.9);
-    scene.add(ambient);
-    let dir = new THREE.DirectionalLight(0xffffff, 0.5);
-    dir.position.set(1,1,1);
-    scene.add(dir);
+  const renderer = new THREE.WebGLRenderer({ canvas: document.querySelector('#threeCanvas'), antialias: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setSize(window.innerWidth, window.innerHeight);
 
-    const containerSizeMap = {
-      '20FT': { length: 5898, width: 2352, height: 2393 },
-      '40FT': { length: 12032, width: 2352, height: 2393 },
-      '40HC': { length: 12032, width: 2352, height: 2698 }
-    };
-    let data = [];
-    let containerOffsets = [];
+  const controls = new THREE.OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true; controls.dampingFactor = 0.08;
 
-    function clearScene(){
-      for(let i=scene.children.length-1;i>=0;i--){
-        let obj=scene.children[i];
-        if(obj.isMesh) scene.remove(obj);
-      }
-    }
-    function addBox(dim,pos,color,xOffset){
-      let g = new THREE.BoxGeometry(dim.l, dim.h, dim.w);
-      let m = new THREE.MeshBasicMaterial({color:color, transparent:true, opacity:0.8});
-      let box = new THREE.Mesh(g,m);
-      box.position.set(pos.x+dim.l/2+xOffset, pos.y+dim.h/2, pos.z+dim.w/2);
-      scene.add(box);
+  const ambient = new THREE.AmbientLight(0xffffff, 0.9); scene.add(ambient);
+  const dir = new THREE.DirectionalLight(0xffffff, 0.6); dir.position.set(1,2,1); scene.add(dir);
 
-      let edges = new THREE.EdgesGeometry(g);
-      let line = new THREE.LineSegments(edges,new THREE.LineBasicMaterial({color:0x000000}));
-      line.position.copy(box.position);
-      scene.add(line);
-    }
-    function drawContainerWire(size, xOffset){
-      let geo = new THREE.BoxGeometry(size.length, size.height, size.width);
-      let mat = new THREE.MeshBasicMaterial({color:0x000000, wireframe:true, transparent:true, opacity:0.2});
-      let mesh = new THREE.Mesh(geo,mat);
-      mesh.position.set(size.length/2+xOffset, size.height/2, size.width/2);
-      scene.add(mesh);
-    }
-    function getAllRotations(dim){
-      const {l,w,h}=dim;
-      return [
-        {l,h,w}, {l,w,h},
-        {h,l,w}, {h,w,l},
-        {w,l,h}, {w,h,l}
-      ];
-    }
+  const mainGroup = new THREE.Group(); scene.add(mainGroup);
+  let containerOffsets = [], data = [];
 
-    function packContainer(container){
-      const size = containerSizeMap[container.type];
-      const xOffset = container.index===0 ? 0 :
-        containerOffsets[container.index-1] + containerSizeMap[data[container.index-1].type].length + 500;
-      containerOffsets[container.index] = xOffset + size.length;
+  function clearScene(){ mainGroup.clear(); }
 
-      drawContainerWire(size,xOffset);
+  function withOutline(mesh, color = 0x000000){
+    const edges = new THREE.EdgesGeometry(mesh.geometry);
+    const line  = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color }));
+    mesh.add(line); return mesh;
+  }
 
-      let items = container.items
-        .map(it => ({
-          ...it,
-          qty: parseInt(it.qty)||0,
-          dims: {
-            l: it.dimensions.length,
-            w: it.dimensions.width,
-            h: it.dimensions.height
-          }
-        }))
-        .filter(it=>it.qty>0)
-        .sort((a,b)=> (b.dims.l*b.dims.w*b.dims.h)-(a.dims.l*a.dims.w*a.dims.h));
+  function addBox(dim, pos, color, xOffset){
+    const geometry = new THREE.BoxGeometry(
+      Math.max(1, dim.l - VISUAL_GAP),
+      Math.max(1, dim.h - VISUAL_GAP),
+      Math.max(1, dim.w - VISUAL_GAP)
+    );
+    const material = new THREE.MeshStandardMaterial({ color: new THREE.Color(color), transparent:false, opacity:0.97 });
+    const box = new THREE.Mesh(geometry, material);
+    box.position.set(pos.x + dim.l/2 + xOffset, pos.y + dim.h/2, pos.z + dim.w/2);
+    withOutline(box, 0x111111);
+    mainGroup.add(box);
+  }
 
-      let cursorX=0,cursorY=0,cursorZ=0;
-      let rowDepth=0;
-      const report=[];
+  function getAllRotations(dim){
+    const L = dim.length ?? dim.l, W = dim.width ?? dim.w, H = dim.height ?? dim.h;
+    const perms = [
+      {l:L,w:W,h:H},{l:L,w:H,h:W},
+      {l:W,w:L,h:H},{l:W,w:H,h:L},
+      {l:H,w:L,h:W},{l:H,w:W,h:L}
+    ];
+    const uniq = new Set(); const out=[];
+    for(const p of perms){ const k=`${p.l}|${p.w}|${p.h}`; if(!uniq.has(k)){ uniq.add(k); out.push(p); } }
+    out.sort((a,b)=> (a.h-b.h) || ((b.l*b.w)-(a.l*a.w)) );
+    return out;
+  }
 
-      for(const it of items){
-        let placed=0;
-        let rots=getAllRotations(it.dims);
+  // ✅ Smart packing dengan rotasi + tangga
+  function packContainer(container){
+    const size = containerSizeMap[container.type];
+    const xOffset = container.index===0 ? 0
+      : containerOffsets[container.index-1] + containerSizeMap[data[container.index-1].type].length + 500;
+    containerOffsets[container.index] = xOffset + size.length;
 
-        while(it.qty>0){
-          let fit=null;
-          for(const r of rots){
-            if(cursorX+r.l <= size.length &&
-               cursorY+r.h <= size.height &&
-               cursorZ+r.w <= size.width){
-              fit=r; break;
-            }
-          }
-          if(!fit){
-            cursorZ=0;
-            cursorY=0;
-            cursorX += (rowDepth>0 ? rowDepth : 200);
-            rowDepth=0;
-            if(cursorX>=size.length) break;
-            continue;
-          }
+    // wireframe container
+    const wireGeo = new THREE.BoxGeometry(size.length, size.height, size.width);
+    const wire = new THREE.LineSegments(new THREE.EdgesGeometry(wireGeo), new THREE.LineBasicMaterial({color:0x000000}));
+    wire.position.set(xOffset + size.length/2, size.height/2, size.width/2);
+    mainGroup.add(wire);
 
-          addBox(fit,{x:cursorX,y:cursorY,z:cursorZ}, it.color||'#888', xOffset);
-          placed++; it.qty--;
+    // urutkan item by volume (besar dulu)
+    const items = container.items.map(it=>({
+      ...it,
+      dims: { l: it.dimensions.length, w: it.dimensions.width, h: it.dimensions.height },
+      qty: parseInt(it.qty) || 0
+    })).filter(it=>it.qty>0)
+      .sort((a,b)=> (b.dims.l*b.dims.w*b.dims.h) - (a.dims.l*a.dims.w*a.dims.h));
 
-          cursorZ += fit.w;
-          rowDepth = Math.max(rowDepth, fit.l);
+    const report = [];
+    for(const it of items){
+      let remaining = it.qty, placed=0;
+      const rots = getAllRotations(it.dims);
 
-          if(cursorZ+fit.w > size.width){
-            cursorZ=0;
-            cursorY += fit.h;
-          }
+      let posX=0,posY=0,posZ=0,maxRowH=0;
+
+      while(remaining>0){
+        let fit=null;
+        for(const r of rots){
+          if(posX+r.l<=size.length && posY+r.h<=size.height && posZ+r.w<=size.width){ fit=r; break; }
         }
-        report.push(`${container.label} — ${it.model} ${it.size} → Placed: ${placed}`);
-        if(it.qty>0){
-          report.push(`⚠️ Sisa ${it.qty} ${it.model} tidak muat`);
-          console.warn("Not all items placed:", it);
+        if(!fit){
+          // geser ke belakang (Z)
+          posZ+=maxRowH; 
+          if(posZ>=size.width){
+            posZ=0; posX+=it.dims.l; maxRowH=0;
+          }
+          if(posX>=size.length){ posX=0; posY+=it.dims.h; }
+          if(posY>=size.height) break;
+          continue;
+        }
+
+        addBox(fit, {x:posX,y:posY,z:posZ}, it.color||'#888', xOffset);
+        placed++; remaining--;
+
+        posX+=fit.l;
+        maxRowH=Math.max(maxRowH,fit.w);
+        if(posX+fit.l>size.length){
+          posX=0; posZ+=maxRowH;
+          maxRowH=0;
+        }
+        if(posZ+fit.w>size.width){
+          posZ=0; posY+=fit.h;
         }
       }
-      return report.join('\n');
+
+      report.push(`${container.label} — ${it.model} ${it.size} → Placed: ${placed} | Missed: ${Math.max(0,it.qty-placed)}`);
     }
 
-    function renderContainers(payload){
-      clearScene(); containerOffsets=[];
-      data = payload.map((c,i)=>({...c,index:i,label:`C${i+1}`}));
-      const reports=[];
-      for(const c of data){
-        reports.push(packContainer(c));
-      }
-      showReport(reports.join('\n\n'));
-    }
-    function showReport(text){
-      const el=document.getElementById('reportContainer');
-      el.innerHTML='';
-      const box=document.createElement('div');
-      box.className='reportBox';
-      box.textContent=text||'—';
-      el.appendChild(box);
-    }
+    return report.join('\n');
+  }
 
-    window.addEventListener('message', (event)=>{
-      if(event?.data?.type==='RENDER_CONTAINER'){
-        try{ renderContainers(event.data.payload); }
-        catch(e){ console.error(e); showReport('Error: '+e.message); }
-      }
-    });
+  function renderContainers(payload){
+    clearScene(); containerOffsets = []; data = payload.map((c,i)=>({...c, index:i, label:`C${i+1}`})); 
+    const reports=[]; for(const c of data){ reports.push(packContainer(c)); }
+    showReport(reports.join('\n\n'));
+  }
 
-    document.getElementById('btnClearCache').addEventListener('click',()=>{
-      localStorage.clear();
-      alert('Cache cleared');
-    });
+  function showReport(text){
+    const el=document.getElementById('reportContainer');
+    el.innerHTML='';
+    const box=document.createElement('div');
+    box.className='reportBox';
+    box.textContent=text||'—';
+    el.appendChild(box);
+  }
 
-    function onResize(){
-      let w=window.innerWidth,h=window.innerHeight;
-      renderer.setSize(w,h);
-      camera.aspect=w/h;
-      camera.updateProjectionMatrix();
+  window.addEventListener('message',(event)=>{
+    if(event?.data?.type==='RENDER_CONTAINER'){
+      try{ renderContainers(event.data.payload); }
+      catch(e){ console.error(e); showReport('Error: '+e.message); }
     }
-    window.addEventListener('resize', onResize);
+  });
 
-    function animate(){
-      requestAnimationFrame(animate);
-      controls.update();
-      renderer.render(scene,camera);
-    }
-    animate();
+  document.getElementById('btnClearCache').addEventListener('click',()=>{ localStorage.clear(); alert('Cache cleared'); });
+
+  function onResize(){
+    const w=window.innerWidth,h=window.innerHeight;
+    renderer.setSize(w,h); camera.aspect=w/h; camera.updateProjectionMatrix();
+  }
+  window.addEventListener('resize',onResize);
+
+  function animate(){ requestAnimationFrame(animate); controls.update(); renderer.render(scene,camera); }
+  animate();
   </script>
 </body>
 </html>
