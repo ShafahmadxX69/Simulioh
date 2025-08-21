@@ -113,13 +113,14 @@
     return out;
   }
 
-  // ✅ Fix: coba semua space, tidak langsung menyerah
+  // ✅ tweak supaya semua item (model/size berbeda) pasti dirender
   function packContainer(container){
     const size = containerSizeMap[container.type];
     const xOffset = container.index===0 ? 0
       : containerOffsets[container.index-1] + containerSizeMap[data[container.index-1].type].length + 500;
     containerOffsets[container.index] = xOffset + size.length;
 
+    // wireframe container
     const wireGeo = new THREE.BoxGeometry(size.length, size.height, size.width);
     const wire = new THREE.LineSegments(new THREE.EdgesGeometry(wireGeo), new THREE.LineBasicMaterial({color:0x000000}));
     wire.position.set(xOffset + size.length/2, size.height/2, size.width/2);
@@ -127,74 +128,76 @@
 
     let spaces = [{ x:0, y:0, z:0, l:size.length, h:size.height, w:size.width }];
 
+    // urutkan by volume biar box besar duluan
     const items = container.items.map(it=>({
       ...it,
-      dims: { l: it.dimensions.length, w: it.dimensions.width, h: it.dimensions.height }
-    })).sort((a,b)=> (b.dims.l*b.dims.w*b.dims.h) - (a.dims.l*a.dims.w*a.dims.h));
+      dims: { l: it.dimensions.length, w: it.dimensions.width, h: it.dimensions.height },
+      qty: parseInt(it.qty) || 0
+    })).filter(it=>it.qty>0)
+      .sort((a,b)=> (b.dims.l*b.dims.w*b.dims.h) - (a.dims.l*a.dims.w*a.dims.h));
 
     const report = [];
-    const VISUAL_GAP = 1;
 
     for(const it of items){
-      let remaining = it.qty | 0; if(!remaining) continue;
+      let remaining = it.qty;
       let placed = 0;
       const rots = getAllRotations(it.dims);
-      let bestRot = rots[0];
-      let bestCap = 0;
-      for(const r of rots){
-        const cap = Math.floor(size.length/r.l)*Math.floor(size.width/r.w)*Math.floor(size.height/r.h);
-        if(cap>bestCap){ bestCap = cap; bestRot = r; }
-      }
 
       while(remaining > 0){
         let placedThisRound = false;
 
         for(let si=0; si<spaces.length && remaining>0; si++){
           const s = spaces[si];
-          if(s.l>=bestRot.l && s.w>=bestRot.w && s.h>=bestRot.h){
-            spaces.splice(si,1);
+          let fit = null;
+          for(const r of rots){
+            if(s.l>=r.l && s.w>=r.w && s.h>=r.h){ fit = r; break; }
+          }
+          if(!fit) continue;
 
-            const nx = Math.floor(s.l / (bestRot.l + LOGIC_GAP));
-            const ny = Math.floor(s.h / (bestRot.h + LOGIC_GAP));
-            const nz = Math.floor(s.w / (bestRot.w + LOGIC_GAP));
-            const blockCount = nx*ny*nz;
-            const toPlace = Math.min(blockCount, remaining);
+          // remove space
+          spaces.splice(si,1);
 
-            let placedHere = 0;
-            outer: for(let y=0;y<ny;y++){
-              for(let x=0;x<nx;x++){
-                for(let z=0;z<nz;z++){
-                  if(placedHere>=toPlace) break outer;
+          const nx = Math.floor(s.l / (fit.l + LOGIC_GAP));
+          const ny = Math.floor(s.h / (fit.h + LOGIC_GAP));
+          const nz = Math.floor(s.w / (fit.w + LOGIC_GAP));
+          const blockCount = nx*ny*nz;
+          const toPlace = Math.min(blockCount, remaining);
 
-                  const posX = s.x + x*(bestRot.l + LOGIC_GAP) + VISUAL_GAP;
-                  const posY = s.y + y*(bestRot.h + LOGIC_GAP) + VISUAL_GAP;
-                  const posZ = s.z + z*(bestRot.w + LOGIC_GAP) + VISUAL_GAP;
-                  if(posX+bestRot.l>size.length || posY+bestRot.h>size.height || posZ+bestRot.w>size.width){
-                    continue;
-                  }
+          let placedHere = 0;
+          outer: for(let y=0;y<ny;y++){
+            for(let x=0;x<nx;x++){
+              for(let z=0;z<nz;z++){
+                if(placedHere>=toPlace) break outer;
 
-                  addBox(bestRot, { x:posX, y:posY, z:posZ }, it.color || '#888', xOffset);
-                  placed++; placedHere++; remaining--; placedThisRound = true;
+                const posX = s.x + x*(fit.l + LOGIC_GAP);
+                const posY = s.y + y*(fit.h + LOGIC_GAP);
+                const posZ = s.z + z*(fit.w + LOGIC_GAP);
+                if(posX+fit.l>size.length || posY+fit.h>size.height || posZ+fit.w>size.width){
+                  continue;
                 }
+
+                addBox(fit, { x:posX, y:posY, z:posZ }, it.color || '#888', xOffset);
+                placed++; placedHere++; remaining--; placedThisRound = true;
               }
             }
-
-            const usedL = Math.min(nx*bestRot.l, s.l);
-            const usedH = Math.min(ny*bestRot.h, s.h);
-            const usedW = Math.min(nz*bestRot.w, s.w);
-            const right = { x:s.x+usedL, y:s.y, z:s.z, l:s.l-usedL, h:usedH, w:usedW };
-            const front = { x:s.x, y:s.y, z:s.z+usedW, l:usedL, h:usedH, w:s.w-usedW };
-            const top   = { x:s.x, y:s.y+usedH, z:s.z, l:s.l, h:s.h-usedH, w:s.w };
-            for(const sp of [right, front, top]) if(sp.l>0 && sp.w>0 && sp.h>0) spaces.push(sp);
-
-            si--;
           }
+
+          // split space
+          const usedL = Math.min(nx*fit.l, s.l);
+          const usedH = Math.min(ny*fit.h, s.h);
+          const usedW = Math.min(nz*fit.w, s.w);
+          const right = { x:s.x+usedL, y:s.y, z:s.z, l:s.l-usedL, h:usedH, w:usedW };
+          const front = { x:s.x, y:s.y, z:s.z+usedW, l:usedL, h:usedH, w:s.w-usedW };
+          const top   = { x:s.x, y:s.y+usedH, z:s.z, l:s.l, h:s.h-usedH, w:s.w };
+          for(const sp of [right, front, top]) if(sp.l>0 && sp.w>0 && sp.h>0) spaces.push(sp);
+
+          si--;
         }
 
         if(!placedThisRound) break;
       }
 
-      report.push(`${container.label} — ${it.model} ${it.size} → Placed: ${placed} | Failed: ${Math.max(0,(it.qty|0)-placed)}`);
+      report.push(`${container.label} — ${it.model} ${it.size} → Placed: ${placed} | Missed: ${Math.max(0,it.qty-placed)}`);
     }
 
     return report.join('\n');
