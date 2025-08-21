@@ -44,7 +44,6 @@
   <script src="https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.161.0/examples/js/controls/OrbitControls.js"></script>
   <script>
-    // === BASIC THREE SETUP ===
     let scene = new THREE.Scene();
     scene.background = new THREE.Color(0xffffff);
     let camera = new THREE.PerspectiveCamera(45, window.innerWidth/window.innerHeight, 1, 100000);
@@ -63,7 +62,6 @@
     dir.position.set(1,1,1);
     scene.add(dir);
 
-    // === GLOBALS ===
     const containerSizeMap = {
       '20FT': { length: 5898, width: 2352, height: 2393 },
       '40FT': { length: 12032, width: 2352, height: 2393 },
@@ -72,7 +70,6 @@
     let data = [];
     let containerOffsets = [];
 
-    // === HELPERS ===
     function clearScene(){
       for(let i=scene.children.length-1;i>=0;i--){
         let obj=scene.children[i];
@@ -81,7 +78,7 @@
     }
     function addBox(dim,pos,color,xOffset){
       let g = new THREE.BoxGeometry(dim.l, dim.h, dim.w);
-      let m = new THREE.MeshBasicMaterial({color:color, transparent:true, opacity:0.8, wireframe:false});
+      let m = new THREE.MeshBasicMaterial({color:color, transparent:true, opacity:0.8});
       let box = new THREE.Mesh(g,m);
       box.position.set(pos.x+dim.l/2+xOffset, pos.y+dim.h/2, pos.z+dim.w/2);
       scene.add(box);
@@ -99,7 +96,7 @@
       scene.add(mesh);
     }
     function getAllRotations(dim){
-      const {length:l,width:w,height:h}=dim;
+      const {l,w,h}=dim;
       return [
         {l,h,w}, {l,w,h},
         {h,l,w}, {h,w,l},
@@ -107,7 +104,6 @@
       ];
     }
 
-    // === SMART PACKER ===
     function packContainer(container){
       const size = containerSizeMap[container.type];
       const xOffset = container.index===0 ? 0 :
@@ -120,7 +116,11 @@
         .map(it => ({
           ...it,
           qty: parseInt(it.qty)||0,
-          dims: it.dimensions
+          dims: {
+            l: it.dimensions.length,
+            w: it.dimensions.width,
+            h: it.dimensions.height
+          }
         }))
         .filter(it=>it.qty>0)
         .sort((a,b)=> (b.dims.l*b.dims.w*b.dims.h)-(a.dims.l*a.dims.w*a.dims.h));
@@ -143,10 +143,9 @@
             }
           }
           if(!fit){
-            // pindah row (tangga ke belakang)
             cursorZ=0;
             cursorY=0;
-            cursorX += rowDepth;
+            cursorX += (rowDepth>0 ? rowDepth : 200);
             rowDepth=0;
             if(cursorX>=size.length) break;
             continue;
@@ -158,17 +157,20 @@
           cursorZ += fit.w;
           rowDepth = Math.max(rowDepth, fit.l);
 
-          if(cursorZ>=size.width){
+          if(cursorZ+fit.w > size.width){
             cursorZ=0;
             cursorY += fit.h;
           }
         }
         report.push(`${container.label} — ${it.model} ${it.size} → Placed: ${placed}`);
+        if(it.qty>0){
+          report.push(`⚠️ Sisa ${it.qty} ${it.model} tidak muat`);
+          console.warn("Not all items placed:", it);
+        }
       }
       return report.join('\n');
     }
 
-    // === RENDERING ===
     function renderContainers(payload){
       clearScene(); containerOffsets=[];
       data = payload.map((c,i)=>({...c,index:i,label:`C${i+1}`}));
@@ -187,7 +189,6 @@
       el.appendChild(box);
     }
 
-    // === MESSAGE HANDLER ===
     window.addEventListener('message', (event)=>{
       if(event?.data?.type==='RENDER_CONTAINER'){
         try{ renderContainers(event.data.payload); }
@@ -200,7 +201,6 @@
       alert('Cache cleared');
     });
 
-    // === RESIZE & LOOP ===
     function onResize(){
       let w=window.innerWidth,h=window.innerHeight;
       renderer.setSize(w,h);
