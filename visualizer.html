@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Container Visualizer – Optimized with Multi-Item Row</title>
+  <title>Container Visualizer – Perfect Packing</title>
   <style>
     :root{
       --panel-bg:#f7f7f8; --border:#d8d8de;
@@ -40,9 +40,8 @@
   </div>
 
   <div id="topbar">
-    <button id="btnRenderDummy" title="Render contoh payload">Render Dummy</button>
     <button id="btnClearCache" title="Hapus cache lokal">Clear Cache</button>
-    <label class="muted">Mode: Auto (uji semua rotasi & mix)</label>
+    <label class="muted">Mode: Auto Packing</label>
     <div class="spacer"></div>
     <span class="muted">Tip: kirim payload via <code>postMessage</code> → { type:"RENDER_CONTAINER", payload }</span>
   </div>
@@ -52,12 +51,10 @@
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
   <script>
   // ------------------ CONFIG ------------------
-  const LOGIC_GAP = 0;   // gap untuk hitungan kapasitas (nol)
-  const VISUAL_GAP = 2;  // gap untuk rendering agar terlihat ada jarak
+  const LOGIC_GAP = 0;   // gap hitungan kapasitas (nol)
+  const VISUAL_GAP = 2;  // gap render visual
 
   const containerSizeMap = {
     "20FT (GP)": { length: 5898, width: 2352, height: 2393 },
@@ -92,7 +89,7 @@
     mesh.add(line); return mesh;
   }
 
-  function addBox(dim, pos, color){
+  function addBox(dim, pos, color, xOffset){
     const geometry = new THREE.BoxGeometry(
       Math.max(1, dim.l - VISUAL_GAP),
       Math.max(1, dim.h - VISUAL_GAP),
@@ -100,12 +97,11 @@
     );
     const material = new THREE.MeshStandardMaterial({ color: new THREE.Color(color), transparent:false, opacity:0.97 });
     const box = new THREE.Mesh(geometry, material);
-    box.position.set(pos.x + dim.l/2, pos.y + dim.h/2, pos.z + dim.w/2);
+    box.position.set(pos.x + dim.l/2 + xOffset, pos.y + dim.h/2, pos.z + dim.w/2);
     withOutline(box, 0x111111);
     mainGroup.add(box);
   }
 
-  // ---- ROTATIONS ----
   function getAllRotations(dim){
     const L = dim.length ?? dim.l, W = dim.width ?? dim.w, H = dim.height ?? dim.h;
     const perms = [
@@ -115,7 +111,6 @@
     ];
     const uniq = new Set(); const out=[];
     for(const p of perms){ const k=`${p.l}|${p.w}|${p.h}`; if(!uniq.has(k)){ uniq.add(k); out.push(p); } }
-    // Prioritaskan h yang lebih tinggi (agar layer lebih sedikit) lalu footprint besar
     out.sort((a,b)=> (a.h-b.h) || ((b.l*b.w)-(a.l*a.w)) );
     return out;
   }
@@ -127,52 +122,47 @@
       : containerOffsets[container.index-1] + containerSizeMap[data[container.index-1].type].length + 500;
     containerOffsets[container.index] = xOffset + size.length;
 
-    // Draw wireframe
     const wireGeo = new THREE.BoxGeometry(size.length, size.height, size.width);
     const wire = new THREE.LineSegments(new THREE.EdgesGeometry(wireGeo), new THREE.LineBasicMaterial({color:0x000000}));
     wire.position.set(xOffset + size.length/2, size.height/2, size.width/2);
     mainGroup.add(wire);
 
-    // Free spaces list
-    let spaces = [{ x:xOffset, y:0, z:0, l:size.length, h:size.height, w:size.width }];
+    let spaces = [{ x:0, y:0, z:0, l:size.length, h:size.height, w:size.width }];
 
-    // Sort items: volume besar dulu biar ga kehabisan ruang
-    const items = container.items
-      .map(it=>({...it, dims: it.dimensions || it.dims || it}))
-      .sort((a,b)=> (b.dims.length*b.dims.width*b.dims.height) - (a.dims.length*a.dims.width*a.dims.height));
+    const items = container.items.map(it=>({
+      ...it,
+      dims: { l: it.dimensions.length, w: it.dimensions.width, h: it.dimensions.height }
+    })).sort((a,b)=> (b.dims.l*b.dims.w*b.dims.h) - (a.dims.l*a.dims.w*a.dims.h));
 
     const report = [];
 
     for(const it of items){
       let remaining = it.qty | 0; if(!remaining) continue;
       let placed = 0;
-      // Coba semua rotasi; pilih yang memberi total count maksimum di kontainer
       const rots = getAllRotations(it.dims);
-      let bestRot = rots[0], bestCap = 0;
+      let bestRot = rots[0];
+      let bestCap = 0;
       for(const r of rots){
         const cap = Math.floor(size.length/r.l)*Math.floor(size.width/r.w)*Math.floor(size.height/r.h);
         if(cap>bestCap){ bestCap = cap; bestRot = r; }
       }
 
-      // Greedy: ambil ruang yang cukup besar, isi grid penuh, lalu split 3 arah (guillotine)
       while(remaining>0){
-        // Ambil ruang pertama yang muat
         let si = -1;
         for(let i=0;i<spaces.length;i++){
           const s = spaces[i];
           if(s.l>=bestRot.l && s.w>=bestRot.w && s.h>=bestRot.h){ si=i; break; }
         }
-        if(si===-1) break; // tidak ada ruang yang muat
+        if(si===-1) break;
         const s = spaces.splice(si,1)[0];
 
         const nx = Math.floor(s.l / (bestRot.l + LOGIC_GAP));
         const ny = Math.floor(s.h / (bestRot.h + LOGIC_GAP));
         const nz = Math.floor(s.w / (bestRot.w + LOGIC_GAP));
         const blockCount = nx*ny*nz;
-        if(blockCount===0){ continue; }
+        if(blockCount===0) continue;
         const toPlace = Math.min(blockCount, remaining);
 
-        // Tempatkan kotak dalam blok grid
         let placedHere = 0;
         outer: for(let y=0;y<ny;y++){
           for(let z=0;z<nz;z++){
@@ -182,13 +172,12 @@
                 x: s.x + x*(bestRot.l + LOGIC_GAP),
                 y: s.y + y*(bestRot.h + LOGIC_GAP),
                 z: s.z + z*(bestRot.w + LOGIC_GAP)
-              }, it.color || '#888');
+              }, it.color || '#888', xOffset);
               placed++; placedHere++; remaining--;
             }
           }
         }
 
-        // Split ruang sisa di 3 arah (right, front, top)
         const usedL = Math.min(nx*bestRot.l, s.l);
         const usedH = Math.min(ny*bestRot.h, s.h);
         const usedW = Math.min(nz*bestRot.w, s.w);
@@ -204,20 +193,16 @@
       report.push(`${container.label} — ${it.model} ${it.size} → Placed: ${placed} | Failed: ${Math.max(0,(it.qty|0)-placed)}`);
     }
 
-    return report.join('
-');
+    return report.join('\n');
   }
 
   function renderContainers(payload){
     clearScene(); containerOffsets = []; data = payload.map((c,i)=>({...c, index:i, label:`C${i+1}`}));
     const reports = [];
     for(const c of data){ reports.push(packContainer(c)); }
-    showReport(reports.join('
-
-'));
+    showReport(reports.join('\n\n'));
   }
 
-  // ------------------ UI / REPORT ------------------
   function showReport(text){
     const el = document.getElementById('reportContainer');
     el.innerHTML = '';
@@ -227,7 +212,6 @@
     el.appendChild(box);
   }
 
-  // ------------------ MESSAGE & DUMMY ------------------
   window.addEventListener('message', (event)=>{
     if(event?.data?.type === 'RENDER_CONTAINER'){
       try{ renderContainers(event.data.payload); }
@@ -235,24 +219,7 @@
     }
   });
 
-  function renderDummy(){
-    const dummyPayload = [
-      {
-        type: '40FT (HQ)',
-        items: [
-          { model: 'FQ819-1', size: 21, qty: 990, dimensions: { length: 634, width: 419, height: 258 }, color: '#90CAF9' }
-        ]
-      }
-    ];
-    renderContainers(dummyPayload);
-  }
-
-  document.getElementById('btnRenderDummy').addEventListener('click', ()=> renderDummy());
   document.getElementById('btnClearCache').addEventListener('click', ()=>{ localStorage.clear(); alert('Cache cleared'); });
-
-  window.addEventListener('DOMContentLoaded', ()=>{
-    if(window.top === window.self) renderDummy();
-  });
 
   function onResize(){
     const w = window.innerWidth, h = window.innerHeight;
