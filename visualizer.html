@@ -5,22 +5,57 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Container Visualizer – Perfect Packing</title>
   <style>
-    body{margin:0;overflow:hidden;font-family:system-ui}
+    :root{
+      --panel-bg:#f7f7f8; --border:#d8d8de;
+      --mono:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;overflow:hidden;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}
     canvas{display:block}
-    #reportContainer{position:absolute;left:0;right:0;bottom:0;
-      background:rgba(255,255,255,0.96);border-top:2px solid #000;
-      font-family:monospace;font-size:12px;max-height:35%;overflow:auto;
-      padding:8px;white-space:pre}
+    #sidebar{position:absolute;inset:0 auto 0 0;width:280px;background:var(--panel-bg);border-right:1px solid var(--border);z-index:10;padding:12px;overflow:auto}
+    #sidebar h3{margin:0 0 8px}
+    .containerBox{background:#fff;border:1px solid var(--border);border-radius:10px;padding:10px;margin-bottom:10px}
+    .muted{color:#666;font-size:12px}
+    .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+    .tag{border:1px solid var(--border);border-radius:999px;padding:2px 8px;font-size:12px;background:#fff}
+    #reportContainer{position:absolute;left:280px;right:0;bottom:0;background:rgba(255,255,255,0.96);border-top:2px solid #000;z-index:5;font-family:var(--mono);font-size:12px;max-height:32%;overflow:auto;display:flex;flex-wrap:wrap;gap:8px;padding:8px}
+    .reportBox{border:1px solid var(--border);background:#fff;border-radius:8px;padding:10px;white-space:pre-wrap;flex:1 1 320px}
+    #topbar{position:absolute;left:280px;right:0;top:0;height:46px;background:rgba(255,255,255,0.9);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;padding:0 10px;z-index:8;backdrop-filter:blur(4px)}
+    #topbar button,#topbar select{border:1px solid var(--border);background:#fff;padding:6px 10px;border-radius:8px;cursor:pointer;font-size:13px}
+    #topbar .spacer{flex:1}
+    #legend{font-family:var(--mono);font-size:11px;color:#444}
   </style>
 </head>
 <body>
-  <canvas id="threeCanvas"></canvas>
+  <div id="sidebar">
+    <h3>Container List</h3>
+    <div id="containerList"></div>
+    <div id="legend" class="muted">
+      <p><strong>Legend:</strong></p>
+      <p>- X: depan → belakang (panjang)<br>
+         - Y: lantai → atas (tinggi)<br>
+         - Z: kiri → kanan (lebar)</p>
+      <p>- GAP visual: no-gap (pakai offset material)</p>
+    </div>
+  </div>
+
+  <div id="topbar">
+    <button id="btnClearCache" title="Hapus cache lokal">Clear Cache</button>
+    <label class="muted">Mode: Auto Packing</label>
+    <div class="spacer"></div>
+    <span class="muted">Tip: kirim payload via <code>postMessage</code> → { type:"RENDER_CONTAINER", payload }</span>
+  </div>
+
   <div id="reportContainer"></div>
+  <canvas id="threeCanvas"></canvas>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
   <script>
-  const VISUAL_GAP = 2;
+  // ------------------ CONFIG ------------------
+  const LOGIC_GAP = 0;            // gap hitungan kapasitas (tetap nol)
+  const VISUAL_SHRINK = 0.5;      // epsilon kecil untuk cegah nembus/z-fighting (≈0.5mm)
+  const CONTAINER_SPACING = 500;  // jarak antarkontainer saat render berdampingan
 
   const containerSizeMap = {
     "20FT (GP)": { length: 5898, width: 2352, height: 2393 },
@@ -28,111 +63,212 @@
     "40FT (HQ)": { length: 12032, width: 2352, height: 2698 }
   };
 
+  // ------------------ THREE SETUP ------------------
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0xffffff);
   const camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 1, 100000);
   camera.position.set(9000, 6000, 9000);
 
   const renderer = new THREE.WebGLRenderer({ canvas: document.querySelector('#threeCanvas'), antialias: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(window.innerWidth, window.innerHeight);
 
   const controls = new THREE.OrbitControls(camera, renderer.domElement);
-  controls.enableDamping = true;
+  controls.enableDamping = true; controls.dampingFactor = 0.08;
 
-  scene.add(new THREE.AmbientLight(0xffffff,0.9));
-  const dir = new THREE.DirectionalLight(0xffffff,0.6); dir.position.set(1,2,1); scene.add(dir);
+  const ambient = new THREE.AmbientLight(0xffffff, 0.9); scene.add(ambient);
+  const dir = new THREE.DirectionalLight(0xffffff, 0.6); dir.position.set(1,2,1); scene.add(dir);
 
   const mainGroup = new THREE.Group(); scene.add(mainGroup);
+  let containerOffsets = [], data = [];
 
-  function withOutline(mesh){
+  function clearScene(){ mainGroup.clear(); }
+
+  function withOutline(mesh, color = 0x000000){
     const edges = new THREE.EdgesGeometry(mesh.geometry);
-    const line  = new THREE.LineSegments(edges,new THREE.LineBasicMaterial({color:0x000}));
+    const line  = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color }));
     mesh.add(line); return mesh;
   }
 
-  function addBox(dim,pos,color,xOffset){
-    const geometry = new THREE.BoxGeometry(
-      dim.l-VISUAL_GAP, dim.h-VISUAL_GAP, dim.w-VISUAL_GAP
-    );
-    const material = new THREE.MeshStandardMaterial({ color:new THREE.Color(color), opacity:0.97 });
-    const box = new THREE.Mesh(geometry,material);
-    box.position.set(pos.x+dim.l/2+xOffset,pos.y+dim.h/2,pos.z+dim.w/2);
-    withOutline(box);
+  // Material dengan polygonOffset: menempel dinding tanpa garis putih / nembus
+  function makeBoxMaterial(color){
+    return new THREE.MeshStandardMaterial({
+      color: new THREE.Color(color),
+      transparent: false,
+      opacity: 0.98,
+      polygonOffset: true,
+      polygonOffsetFactor: 1,
+      polygonOffsetUnits: 1
+    });
+  }
+
+  function addBox(dim, pos, color, xOffset){
+    const l = Math.max(1, dim.l - VISUAL_SHRINK);
+    const h = Math.max(1, dim.h - VISUAL_SHRINK);
+    const w = Math.max(1, dim.w - VISUAL_SHRINK);
+
+    const geometry = new THREE.BoxGeometry(l, h, w);
+    const material = makeBoxMaterial(color || '#888');
+    const box = new THREE.Mesh(geometry, material);
+
+    // Posisi tepat menempel dari sudut slot (tanpa celah visual)
+    box.position.set(pos.x + dim.l/2 + xOffset, pos.y + dim.h/2, pos.z + dim.w/2);
+
+    withOutline(box, 0x111111);
     mainGroup.add(box);
   }
 
   function getAllRotations(dim){
-    const {length:L,width:W,height:H} = dim;
-    return [
+    const L = dim.length ?? dim.l, W = dim.width ?? dim.w, H = dim.height ?? dim.h;
+    const perms = [
       {l:L,w:W,h:H},{l:L,w:H,h:W},
       {l:W,w:L,h:H},{l:W,w:H,h:L},
       {l:H,w:L,h:W},{l:H,w:W,h:L}
     ];
+    const uniq = new Set(); const out=[];
+    for(const p of perms){ const k=`${p.l}|${p.w}|${p.h}`; if(!uniq.has(k)){ uniq.add(k); out.push(p); } }
+    // preferensi: rendah (h) dulu, lalu alas (l*w) besar
+    out.sort((a,b)=> (a.h-b.h) || ((b.l*b.w)-(a.l*a.w)) );
+    return out;
   }
 
-  function packContainer(container,index){
+  // ------------------ PACKING (Guillotine + “tangga” aman) ------------------
+  function packContainer(container){
     const size = containerSizeMap[container.type];
-    const xOffset = index===0?0:index* (size.length+500);
+    const xOffset = container.index===0 ? 0
+      : containerOffsets[container.index-1] + containerSizeMap[data[container.index-1].type].length + CONTAINER_SPACING;
+    containerOffsets[container.index] = xOffset + size.length;
 
-    // wireframe kontainer
-    const wireGeo = new THREE.BoxGeometry(size.length,size.height,size.width);
-    const wire = new THREE.LineSegments(new THREE.EdgesGeometry(wireGeo),new THREE.LineBasicMaterial({color:0x000000}));
-    wire.position.set(xOffset+size.length/2,size.height/2,size.width/2);
+    // Wireframe kontainer
+    const wireGeo = new THREE.BoxGeometry(size.length, size.height, size.width);
+    const wire = new THREE.LineSegments(new THREE.EdgesGeometry(wireGeo), new THREE.LineBasicMaterial({color:0x000000}));
+    wire.position.set(xOffset + size.length/2, size.height/2, size.width/2);
     mainGroup.add(wire);
 
-    // expand semua items → jadi satu list box
-    let jobs = [];
-    for(const it of container.items){
-      const rots = getAllRotations(it.dimensions);
-      // ambil rotasi dengan volume optimal (supaya efisien)
-      let best = rots[0];
-      for(const r of rots){ if(r.l*r.w*r.h < best.l*best.w*best.h) best=r; }
-      for(let i=0;i<it.qty;i++) jobs.push({...it, dims:best});
+    // Ruang awal penuh
+    let spaces = [{ x:0, y:0, z:0, l:size.length, h:size.height, w:size.width }];
+
+    // Gabungkan semua item & urut volume besar → kecil (biar “bareng”, tidak mencar)
+    const items = container.items.map(it=>({
+      ...it,
+      dims: { l: it.dimensions.length, w: it.dimensions.width, h: it.dimensions.height }
+    })).sort((a,b)=> (b.dims.l*b.dims.w*b.dims.h) - (a.dims.l*a.dims.w*a.dims.h));
+
+    const report = [];
+
+    for(const it of items){
+      let remaining = it.qty | 0; if(!remaining) continue;
+      let placed = 0;
+
+      // pilih rotasi terbaik per item berdasar kapasitas
+      const rots = getAllRotations(it.dims);
+      let bestRot = rots[0];
+      let bestCap = 0;
+      for(const r of rots){
+        const cap = Math.floor(size.length/r.l)*Math.floor(size.width/r.w)*Math.floor(size.height/r.h);
+        if(cap>bestCap){ bestCap = cap; bestRot = r; }
+      }
+
+      while(remaining>0 && spaces.length){
+        // cari space pertama yang cukup
+        let si = -1;
+        for(let i=0;i<spaces.length;i++){
+          const s = spaces[i];
+          if(s.l>=bestRot.l && s.w>=bestRot.w && s.h>=bestRot.h){ si=i; break; }
+        }
+        if(si===-1) break;
+
+        const s = spaces.splice(si,1)[0];
+
+        const nx = Math.floor(s.l / (bestRot.l + LOGIC_GAP));
+        const ny = Math.floor(s.h / (bestRot.h + LOGIC_GAP));
+        const nz = Math.floor(s.w / (bestRot.w + LOGIC_GAP));
+        const blockCount = nx*ny*nz;
+        if(blockCount===0) continue;
+
+        const toPlace = Math.min(blockCount, remaining);
+        let placedHere = 0;
+
+        // mode tangga: kurangi cantilever, offset sedikit sepanjang X per lapis Y
+        const stairMode = blockCount < (Math.floor(size.length/bestRot.l) * Math.floor(size.width/bestRot.w) * Math.floor(size.height/bestRot.h));
+
+        outer: for(let y=0;y<ny;y++){           // bawah → atas
+          for(let x=0;x<nx;x++){                // depan → belakang
+            for(let z=0;z<nz;z++){              // kiri → kanan
+              if(placedHere>=toPlace) break outer;
+
+              let xStairOffset = 0;
+              if(stairMode) xStairOffset = Math.floor(y * (bestRot.l / 2));
+
+              const posX = s.x + x*(bestRot.l + LOGIC_GAP) + xStairOffset;
+              const posY = s.y + y*(bestRot.h + LOGIC_GAP);
+              const posZ = s.z + z*(bestRot.w + LOGIC_GAP);
+
+              // Clamp: jangan lewat kontainer
+              if(posX + bestRot.l > size.length || posZ + bestRot.w > size.width || posY + bestRot.h > size.height){
+                continue;
+              }
+
+              addBox(bestRot, { x:posX, y:posY, z:posZ }, it.color || '#888', xOffset);
+
+              placed++; placedHere++; remaining--;
+            }
+          }
+        }
+
+        // pecah sisa ruang (guillotine)
+        const usedL = Math.min(nx*bestRot.l, s.l);
+        const usedH = Math.min(ny*bestRot.h, s.h);
+        const usedW = Math.min(nz*bestRot.w, s.w);
+
+        const right = { x:s.x + usedL, y:s.y, z:s.z, l:s.l - usedL, h:usedH, w:usedW };
+        const front = { x:s.x, y:s.y, z:s.z + usedW, l:usedL, h:usedH, w:s.w - usedW };
+        const top   = { x:s.x, y:s.y + usedH, z:s.z, l:s.l, h:s.h - usedH, w:s.w };
+
+        for(const sp of [right, front, top]){
+          if(sp.l>0 && sp.h>0 && sp.w>0) spaces.push(sp);
+        }
+      }
+
+      report.push(`${container.label} — ${it.model} ${it.size ?? ''} → Placed: ${placed} | Failed: ${Math.max(0,(it.qty|0)-placed)}`);
     }
-    // urutkan volume besar → kecil
-    jobs.sort((a,b)=>(b.dims.l*b.dims.w*b.dims.h)-(a.dims.l*a.dims.w*a.dims.h));
 
-    let posX=0,posY=0,posZ=0,rowHeight=0,lineDepth=0;
-    let report = [];
-
-    for(const job of jobs){
-      const {l,w,h} = job.dims;
-      // kalau overflow lebar → geser Z
-      if(posZ+w>size.width){
-        posZ=0; posX+=lineDepth; lineDepth=0;
-      }
-      // kalau overflow panjang → naik Y
-      if(posX+l>size.length){
-        posX=0; posZ=0; posY+=rowHeight; rowHeight=0;
-      }
-      if(posY+h>size.height) {
-        report.push(`Gagal place ${job.model}`); continue;
-      }
-
-      addBox(job.dims,{x:posX,y:posY,z:posZ},job.color||'#888',xOffset);
-      posZ+=w; 
-      lineDepth=Math.max(lineDepth,l);
-      rowHeight=Math.max(rowHeight,h);
-      report.push(`Placed ${job.model} at (${posX},${posY},${posZ})`);
-    }
-    return report.join("\n");
+    return report.join('\n');
   }
 
   function renderContainers(payload){
-    mainGroup.clear();
-    let reports=[];
-    payload.forEach((c,i)=>{reports.push(packContainer(c,i));});
-    document.getElementById("reportContainer").textContent=reports.join("\n\n");
+    clearScene(); containerOffsets = []; data = payload.map((c,i)=>({...c, index:i, label:`C${i+1}`}));
+    const reports = [];
+    for(const c of data){ reports.push(packContainer(c)); }
+    showReport(reports.join('\n\n'));
   }
 
-  // listener pesan eksternal
-  window.addEventListener("message",(ev)=>{
-    if(ev.data?.type==="RENDER_CONTAINER"){
-      renderContainers(ev.data.payload);
+  function showReport(text){
+    const el = document.getElementById('reportContainer');
+    el.innerHTML = '';
+    const box = document.createElement('div');
+    box.className = 'reportBox';
+    box.textContent = text || '—';
+    el.appendChild(box);
+  }
+
+  // Listener untuk integrasi eksternal
+  window.addEventListener('message', (event)=>{
+    if(event?.data?.type === 'RENDER_CONTAINER'){
+      try{ renderContainers(event.data.payload); }
+      catch(e){ console.error(e); showReport('Error: '+e.message); }
     }
   });
 
-  function animate(){ requestAnimationFrame(animate); controls.update(); renderer.render(scene,camera);}
+  document.getElementById('btnClearCache').addEventListener('click', ()=>{ localStorage.clear(); alert('Cache cleared'); });
+
+  function onResize(){
+    const w = window.innerWidth, h = window.innerHeight;
+    renderer.setSize(w,h); camera.aspect = w/h; camera.updateProjectionMatrix();
+  }
+  window.addEventListener('resize', onResize);
+
+  function animate(){ requestAnimationFrame(animate); controls.update(); renderer.render(scene, camera); }
   animate();
   </script>
 </body>
