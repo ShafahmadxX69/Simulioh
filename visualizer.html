@@ -53,8 +53,8 @@
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
   <script>
   // ------------------ CONFIG ------------------
-  const LOGIC_GAP = 0;   // gap hitungan kapasitas (nol)
-  const VISUAL_GAP = 2;  // gap render visual
+  const LOGIC_GAP = 0;
+  const VISUAL_GAP = 2;
 
   const containerSizeMap = {
     "20FT (GP)": { length: 5898, width: 2352, height: 2393 },
@@ -115,54 +115,50 @@
     return out;
   }
 
-  // ------------------ PACKING (Tangga Conditional, Anti-leak) ------------------
+  // ------------------ PACKING ------------------
   function packContainer(container){
     const size = containerSizeMap[container.type];
     const xOffset = container.index===0 ? 0
       : containerOffsets[container.index-1] + containerSizeMap[data[container.index-1].type].length + 500;
     containerOffsets[container.index] = xOffset + size.length;
 
-    // Wireframe kontainer
+    // Wireframe container
     const wireGeo = new THREE.BoxGeometry(size.length, size.height, size.width);
     const wire = new THREE.LineSegments(new THREE.EdgesGeometry(wireGeo), new THREE.LineBasicMaterial({color:0x000000}));
     wire.position.set(xOffset + size.length/2, size.height/2, size.width/2);
     mainGroup.add(wire);
 
-    // Ruang awal
     let spaces = [{ x:0, y:0, z:0, l:size.length, h:size.height, w:size.width }];
 
-    // Urutkan item: volume besar dulu (fondasi)
+    // Sort semua items dari besar ke kecil (agar bawah ke atas logis)
     const items = container.items.map(it=>({
       ...it,
       dims: { l: it.dimensions.length, w: it.dimensions.width, h: it.dimensions.height }
     })).sort((a,b)=> (b.dims.l*b.dims.w*b.dims.h) - (a.dims.l*a.dims.w*a.dims.h));
 
     const report = [];
-    const VIS_GAP_LOCAL = 1; // biar garis box tidak menempel ke garis container
+    const VISUAL_GAP = 1;
 
     for(const it of items){
       let remaining = it.qty | 0; if(!remaining) continue;
       let placed = 0;
-
-      // Pilih rotasi terbaik untuk kapasitas total
       const rots = getAllRotations(it.dims);
-      let bestRot = rots[0], bestCap = 0;
+      let bestRot = rots[0];
+      let bestCap = 0;
       for(const r of rots){
         const cap = Math.floor(size.length/r.l)*Math.floor(size.width/r.w)*Math.floor(size.height/r.h);
         if(cap>bestCap){ bestCap = cap; bestRot = r; }
       }
 
       while(remaining>0){
-        // Cari ruang yang muat
         let si = -1;
         for(let i=0;i<spaces.length;i++){
           const s = spaces[i];
           if(s.l>=bestRot.l && s.w>=bestRot.w && s.h>=bestRot.h){ si=i; break; }
         }
-        if(si===-1) break; // tidak ada ruang yang muat
+        if(si===-1) break;
         const s = spaces.splice(si,1)[0];
 
-        // Hitung kapasitas grid di ruang s
         const nx = Math.floor(s.l / (bestRot.l + LOGIC_GAP));
         const ny = Math.floor(s.h / (bestRot.h + LOGIC_GAP));
         const nz = Math.floor(s.w / (bestRot.w + LOGIC_GAP));
@@ -170,34 +166,17 @@
         if(blockCount===0) continue;
         const toPlace = Math.min(blockCount, remaining);
 
-        // Tangga hanya kalau grid di ruang s tidak bisa "penuh sempurna" terhadap dimensi kontainer
-        // Maks kapasitas global untuk bentuk ini:
-        const maxGlobal = Math.floor(size.length/bestRot.l) * Math.floor(size.width/bestRot.w) * Math.floor(size.height/bestRot.h);
-        const stairMode = blockCount < maxGlobal;
-
         let placedHere = 0;
 
-        // Susun dari bawah→atas, depan→belakang, kiri→kanan
         outer: for(let y=0;y<ny;y++){
           for(let x=0;x<nx;x++){
             for(let z=0;z<nz;z++){
               if(placedHere>=toPlace) break outer;
 
-              // Default normal (tanpa tangga)
-              let xStairOffset = 0;
-              let zStairOffset = 0;
+              const posX = s.x + x*(bestRot.l + LOGIC_GAP) + VISUAL_GAP;
+              const posY = s.y + y*(bestRot.h + LOGIC_GAP) + VISUAL_GAP;
+              const posZ = s.z + z*(bestRot.w + LOGIC_GAP) + VISUAL_GAP;
 
-              // Tangga conditional (fallback), hanya ketika stairMode = true
-              if(stairMode){
-                xStairOffset = Math.floor(y * (bestRot.l / 2));
-                zStairOffset = Math.floor(y * (bestRot.w / 2));
-              }
-
-              const posX = s.x + x*(bestRot.l + LOGIC_GAP) + xStairOffset + VIS_GAP_LOCAL;
-              const posY = s.y + y*(bestRot.h + LOGIC_GAP) + VIS_GAP_LOCAL;
-              const posZ = s.z + z*(bestRot.w + LOGIC_GAP) + zStairOffset + VIS_GAP_LOCAL;
-
-              // Clamp: jangan keluar kontainer
               if(posX + bestRot.l > size.length || posZ + bestRot.w > size.width || posY + bestRot.h > size.height){
                 continue;
               }
@@ -209,7 +188,6 @@
           }
         }
 
-        // Bagi sisa ruang (guillotine split)
         const usedL = Math.min(nx*bestRot.l, s.l);
         const usedH = Math.min(ny*bestRot.h, s.h);
         const usedW = Math.min(nz*bestRot.w, s.w);
@@ -228,23 +206,13 @@
     return report.join('\n');
   }
 
-  // ------------------ RENDER ------------------
   function renderContainers(payload){
-    clearScene(); containerOffsets = []; data = payload.map((c,i)=>({...c, index:i, label:`C${i+1}`}));
+    clearScene();
+    containerOffsets = [];
+    data = payload.map((c,i)=>({...c, index:i, label:`C${i+1}`}));
     const reports = [];
     for(const c of data){ reports.push(packContainer(c)); }
     showReport(reports.join('\n\n'));
-
-    // Sidebar info sederhana
-    const list = document.getElementById('containerList');
-    list.innerHTML = '';
-    data.forEach(c=>{
-      const div = document.createElement('div');
-      div.className = 'containerBox';
-      div.innerHTML = `<div class="row"><strong>${c.label}</strong> <span class="tag">${c.type}</span></div>
-                       <div class="muted">${(c.items||[]).length} item types</div>`;
-      list.appendChild(div);
-    });
   }
 
   function showReport(text){
@@ -273,22 +241,6 @@
 
   function animate(){ requestAnimationFrame(animate); controls.update(); renderer.render(scene, camera); }
   animate();
-
-  // ------------------ DEMO (boleh hapus) ------------------
-  // Dikirim otomatis agar kamu bisa lihat hasilnya langsung.
-  window.postMessage({
-    type:"RENDER_CONTAINER",
-    payload:[
-      {
-        type:"40FT (HQ)",
-        items:[
-          { model:"FQ900", size:"30", qty:16, color:"#f97316", dimensions:{length:1000,width:600,height:700} },
-          { model:"FQ819", size:"25", qty:28, color:"#10b981", dimensions:{length:800,width:500,height:600} },
-          { model:"FQ803", size:"21", qty:64, color:"#3b82f6", dimensions:{length:600,width:400,height:500} }
-        ]
-      }
-    ]
-  },"*");
   </script>
 </body>
 </html>
