@@ -128,7 +128,8 @@ function packContainer(container){
   wire.position.set(xOffset + size.length/2, size.height/2, size.width/2);
   mainGroup.add(wire);
 
-  // 🔥 gabung & sort items dari besar → kecil
+  let spaces = [{ x:0, y:0, z:0, l:size.length, h:size.height, w:size.width }];
+
   const items = container.items.map(it=>({
     ...it,
     dims: { l: it.dimensions.length, w: it.dimensions.width, h: it.dimensions.height }
@@ -136,26 +137,72 @@ function packContainer(container){
 
   const report = [];
   let currentHeight = 0; // 🔥 tracking penumpukan
+  const VISUAL_GAP = 1; // supaya garis box tidak menempel ke garis container
 
   for(const it of items){
-    let remaining = it.qty|0; if(!remaining) continue;
+    let remaining = it.qty | 0; if(!remaining) continue;
     let placed = 0;
     const rots = getAllRotations(it.dims);
-    const bestRot = rots[0];
+    let bestRot = rots[0];
+    let bestCap = 0;
+    for(const r of rots){
+      const cap = Math.floor(size.length/r.l)*Math.floor(size.width/r.w)*Math.floor(size.height/r.h);
+      if(cap>bestCap){ bestCap = cap; bestRot = r; }
+    }
 
-    // 🔥 taruh semua qty berlapis, mulai dari currentHeight
     while(remaining>0){
-      const posX = 0 + VISUAL_GAP;
-      const posY = currentHeight + VISUAL_GAP;
-      const posZ = 0 + VISUAL_GAP;
+      let si = -1;
+      for(let i=0;i<spaces.length;i++){
+        const s = spaces[i];
+        if(s.l>=bestRot.l && s.w>=bestRot.w && s.h>=bestRot.h){ si=i; break; }
+      }
+      if(si===-1) break;
+      const s = spaces.splice(si,1)[0];
 
-      // jangan keluar dari container
-      if(posY + bestRot.h > size.height) break;
+      const nx = Math.floor(s.l / (bestRot.l + LOGIC_GAP));
+      const ny = Math.floor(s.h / (bestRot.h + LOGIC_GAP));
+      const nz = Math.floor(s.w / (bestRot.w + LOGIC_GAP));
+      const blockCount = nx*ny*nz;
+      if(blockCount===0) continue;
+      const toPlace = Math.min(blockCount, remaining);
 
-      addBox(bestRot, {x:posX,y:posY,z:posZ}, it.color || '#888', xOffset);
+      let placedHere = 0;
+      const stairMode = blockCount < (Math.floor(size.length/bestRot.l) * Math.floor(size.width/bestRot.w) * Math.floor(size.height/bestRot.h));
 
-      currentHeight += bestRot.h + LOGIC_GAP; // naikkan tumpukan
-      placed++; remaining--;
+      outer: for(let y=0;y<ny;y++){           // bawah ke atas
+        for(let x=0;x<nx;x++){                // depan ke belakang
+          for(let z=0;z<nz;z++){              // kiri ke kanan
+            if(placedHere>=toPlace) break outer;
+
+            let xStairOffset = 0;
+            if(stairMode) xStairOffset = y * (bestRot.l / 2);
+
+            const posX = s.x + x*(bestRot.l + LOGIC_GAP) + xStairOffset + VISUAL_GAP;
+            const posY = s.y + y*(bestRot.h + LOGIC_GAP) + VISUAL_GAP;
+            const posZ = s.z + z*(bestRot.w + LOGIC_GAP) + VISUAL_GAP;
+
+            // Clamp: jangan sampai lewat container
+            if(posX + bestRot.l > size.length || posZ + bestRot.w > size.width || posY + bestRot.h > size.height){
+              continue;
+            }
+
+            addBox(bestRot, { x:posX, y:posY, z:posZ }, it.color || '#888', xOffset);
+
+            placed++; placedHere++; remaining--;
+          }
+        }
+      }
+
+      const usedL = Math.min(nx*bestRot.l, s.l);
+      const usedH = Math.min(ny*bestRot.h, s.h);
+      const usedW = Math.min(nz*bestRot.w, s.w);
+
+      const right = { x:s.x + usedL, y:s.y, z:s.z, l:s.l - usedL, h:usedH, w:usedW };
+      const front = { x:s.x, y:s.y, z:s.z + usedW, l:usedL, h:usedH, w:s.w - usedW };
+      const top   = { x:s.x, y:s.y + usedH, z:s.z, l:s.l, h:s.h - usedH, w:s.w };
+      for(const sp of [right, front, top]){
+        if(sp.l>0 && sp.h>0 && sp.w>0) spaces.push(sp);
+      }
     }
 
     report.push(`${container.label} — ${it.model} ${it.size} → Placed: ${placed} | Failed: ${Math.max(0,(it.qty|0)-placed)}`);
