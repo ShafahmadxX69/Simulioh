@@ -53,7 +53,7 @@
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
   <script>
   // ------------------ CONFIG ------------------
-  const LOGIC_GAP = 0;   // gap hitungan kapasitas (nol)
+  const LOGIC_GAP = 0;   // gap hitungan kapasitas
   const VISUAL_GAP = 2;  // gap render visual
 
   const containerSizeMap = {
@@ -79,7 +79,7 @@
   const dir = new THREE.DirectionalLight(0xffffff, 0.6); dir.position.set(1,2,1); scene.add(dir);
 
   const mainGroup = new THREE.Group(); scene.add(mainGroup);
-  let containerOffsets = [], data = [];
+  let data = [];
 
   function clearScene(){ mainGroup.clear(); }
 
@@ -89,7 +89,7 @@
     mesh.add(line); return mesh;
   }
 
-  function addBox(dim, pos, color, xOffset){
+  function addBox(dim, pos, color){
     const geometry = new THREE.BoxGeometry(
       Math.max(1, dim.l - VISUAL_GAP),
       Math.max(1, dim.h - VISUAL_GAP),
@@ -97,7 +97,7 @@
     );
     const material = new THREE.MeshStandardMaterial({ color: new THREE.Color(color), transparent:false, opacity:0.97 });
     const box = new THREE.Mesh(geometry, material);
-    box.position.set(pos.x + dim.l/2 + xOffset, pos.y + dim.h/2, pos.z + dim.w/2);
+    box.position.set(pos.x + dim.l/2, pos.y + dim.h/2, pos.z + dim.w/2);
     withOutline(box, 0x111111);
     mainGroup.add(box);
   }
@@ -111,21 +111,21 @@
     ];
     const uniq = new Set(); const out=[];
     for(const p of perms){ const k=`${p.l}|${p.w}|${p.h}`; if(!uniq.has(k)){ uniq.add(k); out.push(p); } }
-    out.sort((a,b)=> (b.h-a.h) || ((b.l*b.w)-(a.l*a.w)) );
+    out.sort((a,b)=> (a.h-b.h) || ((b.l*b.w)-(a.l*a.w)) );
     return out;
   }
 
   // ------------------ PACKING ------------------
   function packContainer(container){
     const size = containerSizeMap[container.type];
-    const xOffset = container.index===0 ? 0
-      : containerOffsets[container.index-1] + containerSizeMap[data[container.index-1].type].length + 500;
-    containerOffsets[container.index] = xOffset + size.length;
 
-    const wireGeo = new THREE.BoxGeometry(size.length, size.height, size.width);
-    const wire = new THREE.LineSegments(new THREE.EdgesGeometry(wireGeo), new THREE.LineBasicMaterial({color:0x000000}));
-    wire.position.set(xOffset + size.length/2, size.height/2, size.width/2);
-    mainGroup.add(wire);
+    // Wireframe container hanya sekali (global)
+    if(container.index === 0){
+      const wireGeo = new THREE.BoxGeometry(size.length, size.height, size.width);
+      const wire = new THREE.LineSegments(new THREE.EdgesGeometry(wireGeo), new THREE.LineBasicMaterial({color:0x000000}));
+      wire.position.set(size.length/2, size.height/2, size.width/2);
+      mainGroup.add(wire);
+    }
 
     let spaces = [{ x:0, y:0, z:0, l:size.length, h:size.height, w:size.width }];
 
@@ -139,59 +139,61 @@
     for(const it of items){
       let remaining = it.qty | 0; if(!remaining) continue;
       let placed = 0;
-
       const rots = getAllRotations(it.dims);
+      let bestRot = rots[0];
+      let bestCap = 0;
+      for(const r of rots){
+        const cap = Math.floor(size.length/r.l)*Math.floor(size.width/r.w)*Math.floor(size.height/r.h);
+        if(cap>bestCap){ bestCap = cap; bestRot = r; }
+      }
 
       while(remaining>0){
         let si = -1;
         for(let i=0;i<spaces.length;i++){
           const s = spaces[i];
-          for(const r of rots){
-            if(s.l>=r.l && s.w>=r.w && s.h>=r.h){ si=i; break; }
-          }
-          if(si!==-1) break;
+          if(s.l>=bestRot.l && s.w>=bestRot.w && s.h>=bestRot.h){ si=i; break; }
         }
         if(si===-1) break;
         const s = spaces.splice(si,1)[0];
 
-        for(const r of rots){
-          const nx = Math.floor(s.l / (r.l + LOGIC_GAP));
-          const ny = Math.floor(s.h / (r.h + LOGIC_GAP));
-          const nz = Math.floor(s.w / (r.w + LOGIC_GAP));
+        const nx = Math.floor(s.l / (bestRot.l + LOGIC_GAP));
+        const ny = Math.floor(s.h / (bestRot.h + LOGIC_GAP));
+        const nz = Math.floor(s.w / (bestRot.w + LOGIC_GAP));
+        const blockCount = nx*ny*nz;
+        if(blockCount===0) continue;
+        const toPlace = Math.min(blockCount, remaining);
 
-          let placedHere = 0;
-          outer: for(let y=0;y<ny;y++){
-            for(let x=0;x<nx;x++){
-              for(let z=0;z<nz;z++){
-                if(remaining<=0) break outer;
+        let placedHere = 0;
 
-                const posX = s.x + x*(r.l + LOGIC_GAP) + VISUAL_GAP;
-                const posY = s.y + y*(r.h + LOGIC_GAP) + VISUAL_GAP;
-                const posZ = s.z + z*(r.w + LOGIC_GAP) + VISUAL_GAP;
+        outer: for(let y=0;y<ny;y++){    
+          for(let x=0;x<nx;x++){         
+            for(let z=0;z<nz;z++){      
+              if(placedHere>=toPlace) break outer;
 
-                if(posX + r.l > size.length || posZ + r.w > size.width || posY + r.h > size.height) continue;
+              const posX = s.x + x*(bestRot.l + LOGIC_GAP) + VISUAL_GAP;
+              const posY = s.y + y*(bestRot.h + LOGIC_GAP) + VISUAL_GAP;
+              const posZ = s.z + z*(bestRot.w + LOGIC_GAP) + VISUAL_GAP;
 
-                addBox(r, { x:posX, y:posY, z:posZ }, it.color || '#888', xOffset);
-
-                placed++; placedHere++; remaining--;
+              if(posX + bestRot.l > size.length || posZ + bestRot.w > size.width || posY + bestRot.h > size.height){
+                continue;
               }
+
+              addBox(bestRot, { x:posX, y:posY, z:posZ }, it.color || '#888');
+
+              placed++; placedHere++; remaining--;
             }
           }
+        }
 
-          if(placedHere>0){
-            const usedL = nx*r.l;
-            const usedH = ny*r.h;
-            const usedW = nz*r.w;
+        const usedL = Math.min(nx*bestRot.l, s.l);
+        const usedH = Math.min(ny*bestRot.h, s.h);
+        const usedW = Math.min(nz*bestRot.w, s.w);
 
-            const right = { x:s.x + usedL, y:s.y, z:s.z, l:s.l - usedL, h:usedH, w:usedW };
-            const front = { x:s.x, y:s.y, z:s.z + usedW, l:usedL, h:usedH, w:s.w - usedW };
-            const top   = { x:s.x, y:s.y + usedH, z:s.z, l:s.l, h:s.h - usedH, w:s.w };
-
-            for(const sp of [right, front, top]){
-              if(sp.l>0 && sp.h>0 && sp.w>0) spaces.push(sp);
-            }
-            break;
-          }
+        const right = { x:s.x + usedL, y:s.y, z:s.z, l:s.l - usedL, h:usedH, w:usedW };
+        const front = { x:s.x, y:s.y, z:s.z + usedW, l:usedL, h:usedH, w:s.w - usedW };
+        const top   = { x:s.x, y:s.y + usedH, z:s.z, l:s.l, h:s.h - usedH, w:s.w };
+        for(const sp of [right, front, top]){
+          if(sp.l>0 && sp.h>0 && sp.w>0) spaces.push(sp);
         }
       }
 
@@ -202,7 +204,7 @@
   }
 
   function renderContainers(payload){
-    clearScene(); containerOffsets = []; data = payload.map((c,i)=>({...c, index:i, label:`C${i+1}`}));
+    clearScene(); data = payload.map((c,i)=>({...c, index:i, label:`C${i+1}`}));
     const reports = [];
     for(const c of data){ reports.push(packContainer(c)); }
     showReport(reports.join('\n\n'));
