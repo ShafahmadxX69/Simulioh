@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Container Visualizer – Perfect Packing</title>
+  <title>Container Visualizer – Auto Packing</title>
   <style>
     :root{
       --panel-bg:#f7f7f8; --border:#d8d8de;
@@ -16,12 +16,10 @@
     #sidebar h3{margin:0 0 8px}
     .containerBox{background:#fff;border:1px solid var(--border);border-radius:10px;padding:10px;margin-bottom:10px}
     .muted{color:#666;font-size:12px}
-    .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-    .tag{border:1px solid var(--border);border-radius:999px;padding:2px 8px;font-size:12px;background:#fff}
     #reportContainer{position:absolute;left:280px;right:0;bottom:0;background:rgba(255,255,255,0.96);border-top:2px solid #000;z-index:5;font-family:var(--mono);font-size:12px;max-height:35%;overflow:auto;display:flex;flex-wrap:wrap;gap:8px;padding:8px}
     .reportBox{border:1px solid var(--border);background:#fff;border-radius:8px;padding:10px;white-space:pre-wrap;flex:1 1 280px}
     #topbar{position:absolute;left:280px;right:0;top:0;height:46px;background:rgba(255,255,255,0.9);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;padding:0 10px;z-index:8;backdrop-filter:blur(4px)}
-    #topbar button,#topbar select{border:1px solid var(--border);background:#fff;padding:6px 10px;border-radius:8px;cursor:pointer;font-size:13px}
+    #topbar button{border:1px solid var(--border);background:#fff;padding:6px 10px;border-radius:8px;cursor:pointer;font-size:13px}
     #topbar .spacer{flex:1}
     #legend{font-family:var(--mono);font-size:11px;color:#444}
   </style>
@@ -40,10 +38,9 @@
   </div>
 
   <div id="topbar">
-    <button id="btnClearCache" title="Hapus cache lokal">Clear Cache</button>
-    <label class="muted">Mode: Auto Packing</label>
+    <button id="btnClearCache">Clear Cache</button>
+    <label class="muted">Mode: Auto Packing (big items below)</label>
     <div class="spacer"></div>
-    <span class="muted">Tip: kirim payload via <code>postMessage</code> → { type:"RENDER_CONTAINER", payload }</span>
   </div>
 
   <div id="reportContainer"></div>
@@ -109,7 +106,6 @@
     ];
     const uniq = new Set(); const out=[];
     for(const p of perms){ const k=`${p.l}|${p.w}|${p.h}`; if(!uniq.has(k)){ uniq.add(k); out.push(p); } }
-    out.sort((a,b)=> (a.h-b.h) || ((b.l*b.w)-(a.l*a.w)) );
     return out;
   }
 
@@ -128,7 +124,10 @@
     const items = container.items.map(it=>({
       ...it,
       dims: { l: it.dimensions.length, w: it.dimensions.width, h: it.dimensions.height }
-    })).sort((a,b)=> (b.dims.l*b.dims.w*b.dims.h) - (a.dims.l*a.dims.w*a.dims.h));
+    }));
+
+    // sort by volume descending (besar duluan)
+    items.sort((a,b)=> (b.dims.l*b.dims.w*b.dims.h) - (a.dims.l*a.dims.w*a.dims.h));
 
     const report = [];
 
@@ -136,62 +135,32 @@
       let remaining = it.qty | 0; if(!remaining) continue;
       let placed = 0;
       const rots = getAllRotations(it.dims);
-      let bestRot = rots[0];
-      let bestCap = 0;
-      for(const r of rots){
-        const cap = Math.floor(size.length/r.l)*Math.floor(size.width/r.w)*Math.floor(size.height/r.h);
-        if(cap>bestCap){ bestCap = cap; bestRot = r; }
-      }
 
       while(remaining>0){
-        let si = -1;
+        // pilih space dengan y terendah (lantai prioritas)
+        spaces.sort((a,b)=> a.y - b.y || a.x - b.x || a.z - b.z);
+        let si = -1, chosenRot=null;
         for(let i=0;i<spaces.length;i++){
-          const s = spaces[i];
-          if(s.l>=bestRot.l && s.w>=bestRot.w && s.h>=bestRot.h){ si=i; break; }
+          for(const r of rots){
+            if(spaces[i].l>=r.l && spaces[i].w>=r.w && spaces[i].h>=r.h){ si=i; chosenRot=r; break; }
+          }
+          if(si!==-1) break;
         }
         if(si===-1) break;
         const s = spaces.splice(si,1)[0];
 
-        const nx = Math.floor(s.l / (bestRot.l + LOGIC_GAP));
-        const ny = Math.floor(s.h / (bestRot.h + LOGIC_GAP));
-        const nz = Math.floor(s.w / (bestRot.w + LOGIC_GAP));
-        const blockCount = nx*ny*nz;
-        if(blockCount===0) continue;
-        const toPlace = Math.min(blockCount, remaining);
+        const posX = s.x, posY = s.y, posZ = s.z;
+        addBox(chosenRot, { x:posX, y:posY, z:posZ }, it.color || '#888', xOffset);
+        placed++; remaining--;
 
-        let placedHere = 0;
-        for(let y=0;y<ny;y++){
-          for(let x=0;x<nx;x++){
-            for(let z=0;z<nz;z++){
-              if(placedHere>=toPlace) break;
-              const posX = s.x + x*(bestRot.l + LOGIC_GAP);
-              const posY = s.y + y*(bestRot.h + LOGIC_GAP);
-              const posZ = s.z + z*(bestRot.w + LOGIC_GAP);
-
-              if(posX + bestRot.l > size.length || posZ + bestRot.w > size.width || posY + bestRot.h > size.height){
-                continue;
-              }
-
-              addBox(bestRot, { x:posX, y:posY, z:posZ }, it.color || '#888', xOffset);
-
-              placed++; placedHere++; remaining--;
-            }
-          }
-        }
-
-        const usedL = Math.min(nx*bestRot.l, s.l);
-        const usedH = Math.min(ny*bestRot.h, s.h);
-        const usedW = Math.min(nz*bestRot.w, s.w);
-
-        const right = { x:s.x + usedL, y:s.y, z:s.z, l:s.l - usedL, h:usedH, w:usedW };
-        const front = { x:s.x, y:s.y, z:s.z + usedW, l:usedL, h:usedH, w:s.w - usedW };
-        const top   = { x:s.x, y:s.y + usedH, z:s.z, l:s.l, h:s.h - usedH, w:s.w };
-        for(const sp of [right, front, top]){
-          if(sp.l>0 && sp.h>0 && sp.w>0) spaces.push(sp);
-        }
+        // buat ruang sisa (kanan, depan, atas)
+        const right = { x:posX+chosenRot.l, y:posY, z:posZ, l:s.l - chosenRot.l, h:chosenRot.h, w:chosenRot.w };
+        const front = { x:posX, y:posY, z:posZ+chosenRot.w, l:chosenRot.l, h:chosenRot.h, w:s.w - chosenRot.w };
+        const top   = { x:posX, y:posY+chosenRot.h, z:posZ, l:chosenRot.l, h:s.h - chosenRot.h, w:chosenRot.w };
+        for(const sp of [right,front,top]){ if(sp.l>0&&sp.h>0&&sp.w>0) spaces.push(sp); }
       }
 
-      report.push(`${container.label} — ${it.model} ${it.size} → Placed: ${placed} | Failed: ${Math.max(0,(it.qty|0)-placed)}`);
+      report.push(`${container.label} — ${it.model} ${it.size} → Placed: ${placed} | Failed: ${(it.qty|0)-placed}`);
     }
 
     return report.join('\n');
