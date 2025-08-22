@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Container Visualizer – Perfect Packing (Hybrid)</title>
+  <title>Container Visualizer – Perfect Packing</title>
   <style>
     :root{
       --panel-bg:#f7f7f8; --border:#d8d8de;
@@ -54,7 +54,7 @@
   <script>
   // ------------------ CONFIG ------------------
   const LOGIC_GAP = 0;   // gap hitungan kapasitas (nol)
-  const VISUAL_GAP = 2;  // gap render visual (global UI copy)
+  const VISUAL_GAP = 2;  // gap render visual
 
   const containerSizeMap = {
     "20FT (GP)": { length: 5898, width: 2352, height: 2393 },
@@ -102,7 +102,6 @@
     mainGroup.add(box);
   }
 
-  // ------------------ ROTATION (from script1: height desc, base area desc) ------------------
   function getAllRotations(dim){
     const L = dim.length ?? dim.l, W = dim.width ?? dim.w, H = dim.height ?? dim.h;
     const perms = [
@@ -112,110 +111,58 @@
     ];
     const uniq = new Set(); const out=[];
     for(const p of perms){ const k=`${p.l}|${p.w}|${p.h}`; if(!uniq.has(k)){ uniq.add(k); out.push(p); } }
-    // script1 order: prioritize taller then larger base area
-    out.sort((a,b)=> (b.h - a.h) || ((b.l*b.w) - (a.l*a.w)) );
+    out.sort((a,b)=> (a.h-b.h) || ((b.l*b.w)-(a.l*a.w)) );
     return out;
   }
 
-  // ------------------ PACKING (script2 algorithm + placement) ------------------
-  function packContainer(container){
-    const size = containerSizeMap[container.type];
-    const xOffset = container.index===0 ? 0
-      : containerOffsets[container.index-1] + containerSizeMap[data[container.index-1].type].length + 500;
-    containerOffsets[container.index] = xOffset + size.length;
+  // ------------------ PACKING (Guillotine heuristic) ------------------
+// ------------------ PACKING (Tangga Conditional, Anti-leak) ------------------
+function packContainer(container){
+  const size = containerSizeMap[container.type];
+  const xOffset = container.index===0 ? 0
+    : containerOffsets[container.index-1] + containerSizeMap[data[container.index-1].type].length + 500;
+  containerOffsets[container.index] = xOffset + size.length;
 
-    // wireframe container
-    const wireGeo = new THREE.BoxGeometry(size.length, size.height, size.width);
-    const wire = new THREE.LineSegments(new THREE.EdgesGeometry(wireGeo), new THREE.LineBasicMaterial({color:0x000000}));
-    wire.position.set(xOffset + size.length/2, size.height/2, size.width/2);
-    mainGroup.add(wire);
+  const wireGeo = new THREE.BoxGeometry(size.length, size.height, size.width);
+  const wire = new THREE.LineSegments(new THREE.EdgesGeometry(wireGeo), new THREE.LineBasicMaterial({color:0x000000}));
+  wire.position.set(xOffset + size.length/2, size.height/2, size.width/2);
+  mainGroup.add(wire);
 
-    // free-space list
-    let spaces = [{ x:0, y:0, z:0, l:size.length, h:size.height, w:size.width }];
+  // 🔥 gabung & sort items dari besar → kecil
+  const items = container.items.map(it=>({
+    ...it,
+    dims: { l: it.dimensions.length, w: it.dimensions.width, h: it.dimensions.height }
+  })).sort((a,b)=> (b.dims.l*b.dims.w*b.dims.h) - (a.dims.l*a.dims.w*a.dims.h));
 
-    // sort items by volume desc (script2)
-    const items = container.items.map(it=>({
-      ...it,
-      dims: { l: it.dimensions.length, w: it.dimensions.width, h: it.dimensions.height }
-    })).sort((a,b)=> (b.dims.l*b.dims.w*b.dims.h) - (a.dims.l*a.dims.w*a.dims.h));
+  const report = [];
+  let currentHeight = 0; // 🔥 tracking penumpukan
 
-    const report = [];
-    const LOCAL_VISUAL_GAP = 1; // script2 tweak for tighter visuals inside container
+  for(const it of items){
+    let remaining = it.qty|0; if(!remaining) continue;
+    let placed = 0;
+    const rots = getAllRotations(it.dims);
+    const bestRot = rots[0];
 
-    for(const it of items){
-      let remaining = it.qty | 0; if(!remaining) continue;
-      let placed = 0;
-      const rots = getAllRotations(it.dims); // ordered by script1 rule
+    // 🔥 taruh semua qty berlapis, mulai dari currentHeight
+    while(remaining>0){
+      const posX = 0 + VISUAL_GAP;
+      const posY = currentHeight + VISUAL_GAP;
+      const posZ = 0 + VISUAL_GAP;
 
-      while(remaining>0){
-        // Find first space + first rotation (by script1 order) that fits
-        let si = -1; let chosenRot = null;
-        for(let i=0;i<spaces.length && si===-1;i++){
-          const s = spaces[i];
-          for(const r of rots){
-            if(s.l>=r.l && s.w>=r.w && s.h>=r.h){ si=i; chosenRot=r; break; }
-          }
-        }
-        if(si===-1 || !chosenRot) break; // no more placements possible
+      // jangan keluar dari container
+      if(posY + bestRot.h > size.height) break;
 
-        const s = spaces.splice(si,1)[0];
-        const r = chosenRot; // script1-ordered rotation
+      addBox(bestRot, {x:posX,y:posY,z:posZ}, it.color || '#888', xOffset);
 
-        // fill this space with grid of r (script2 placement)
-        const nx = Math.floor(s.l / (r.l + LOGIC_GAP));
-        const ny = Math.floor(s.h / (r.h + LOGIC_GAP));
-        const nz = Math.floor(s.w / (r.w + LOGIC_GAP));
-        const blockCount = nx*ny*nz;
-        if(blockCount===0){ continue; }
-        const toPlace = Math.min(blockCount, remaining);
-
-        let placedHere = 0;
-        const maxFull = Math.floor(size.length/r.l) * Math.floor(size.width/r.w) * Math.floor(size.height/r.h);
-        const stairMode = blockCount < maxFull; // script2 stair heuristic
-
-        outer: for(let y=0;y<ny;y++){           // bawah ke atas
-          for(let x=0;x<nx;x++){                // depan ke belakang
-            for(let z=0;z<nz;z++){              // kiri ke kanan
-              if(placedHere>=toPlace) break outer;
-
-              let xStairOffset = 0;
-              if(stairMode) xStairOffset = y * (r.l / 2);
-
-              const posX = s.x + x*(r.l + LOGIC_GAP) + xStairOffset + LOCAL_VISUAL_GAP;
-              const posY = s.y + y*(r.h + LOGIC_GAP) + LOCAL_VISUAL_GAP;
-              const posZ = s.z + z*(r.w + LOGIC_GAP) + LOCAL_VISUAL_GAP;
-
-              // Clamp
-              if(posX + r.l > size.length || posZ + r.w > size.width || posY + r.h > size.height){
-                continue;
-              }
-
-              addBox(r, { x:posX, y:posY, z:posZ }, it.color || '#888', xOffset);
-
-              placed++; placedHere++; remaining--;
-            }
-          }
-        }
-
-        // split space (script2 guillotine-style)
-        const usedL = Math.min(nx*r.l, s.l);
-        const usedH = Math.min(ny*r.h, s.h);
-        const usedW = Math.min(nz*r.w, s.w);
-
-        const right = { x:s.x + usedL, y:s.y, z:s.z, l:s.l - usedL, h:usedH, w:usedW };
-        const front = { x:s.x, y:s.y, z:s.z + usedW, l:usedL, h:usedH, w:s.w - usedW };
-        const top   = { x:s.x, y:s.y + usedH, z:s.z, l:s.l, h:s.h - usedH, w:s.w };
-        for(const sp of [right, front, top]){
-          if(sp.l>0 && sp.h>0 && sp.w>0) spaces.push(sp);
-        }
-      }
-
-      // ------------------ REPORT (script2) ------------------
-      report.push(`${container.label} — ${it.model} ${it.size} → Placed: ${placed} | Failed: ${Math.max(0,(it.qty|0)-placed)}`);
+      currentHeight += bestRot.h + LOGIC_GAP; // naikkan tumpukan
+      placed++; remaining--;
     }
 
-    return report.join('\n');
+    report.push(`${container.label} — ${it.model} ${it.size} → Placed: ${placed} | Failed: ${Math.max(0,(it.qty|0)-placed)}`);
   }
+
+  return report.join('\n');
+}
 
   function renderContainers(payload){
     clearScene(); containerOffsets = []; data = payload.map((c,i)=>({...c, index:i, label:`C${i+1}`}));
