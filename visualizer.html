@@ -1,4 +1,4 @@
-<!DOCTYPE html> 
+<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8"/>
@@ -52,7 +52,6 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
   <script>
-  const LOGIC_GAP = 0;
   const VISUAL_GAP = 2;
 
   const containerSizeMap = {
@@ -113,7 +112,7 @@
     return out;
   }
 
-  // ✅ Smart packing dengan rotasi + tangga
+  // 🟢 Packing dengan shared spaces antar item
   function packContainer(container){
     const size = containerSizeMap[container.type];
     const xOffset = container.index===0 ? 0
@@ -126,7 +125,7 @@
     wire.position.set(xOffset + size.length/2, size.height/2, size.width/2);
     mainGroup.add(wire);
 
-    // urutkan item by volume (besar dulu)
+    // semua items (gabungan) → diurut volume besar dulu
     const items = container.items.map(it=>({
       ...it,
       dims: { l: it.dimensions.length, w: it.dimensions.width, h: it.dimensions.height },
@@ -134,45 +133,31 @@
     })).filter(it=>it.qty>0)
       .sort((a,b)=> (b.dims.l*b.dims.w*b.dims.h) - (a.dims.l*a.dims.w*a.dims.h));
 
+    const spaces = [{x:0,y:0,z:0,l:size.length,h:size.height,w:size.width}];
     const report = [];
 
-    // 🔑 Posisi global per container (bukan per item)
-    let posX=0, posY=0, posZ=0, maxRowH=0;
-
     for(const it of items){
-      let remaining = it.qty, placed=0;
-      const rots = getAllRotations(it.dims);
-
+      let placed=0, remaining=it.qty;
       while(remaining>0){
-        let fit=null;
-        for(const r of rots){
-          if(posX+r.l<=size.length && posY+r.h<=size.height && posZ+r.w<=size.width){ fit=r; break; }
-        }
-        if(!fit){
-          // geser ke belakang (Z)
-          posZ+=maxRowH; 
-          if(posZ>=size.width){
-            posZ=0; posX+=it.dims.l; maxRowH=0;
+        let fit=null, fitIndex=-1;
+        for(let s=0;s<spaces.length;s++){
+          const sp=spaces[s];
+          for(const r of getAllRotations(it.dims)){
+            if(r.l<=sp.l && r.h<=sp.h && r.w<=sp.w){ fit={...r,pos:{x:sp.x,y:sp.y,z:sp.z}}; fitIndex=s; break; }
           }
-          if(posX>=size.length){ posX=0; posY+=it.dims.h; }
-          if(posY>=size.height) break;
-          continue;
+          if(fit) break;
         }
+        if(!fit) break; // gak muat lagi
 
-        addBox(fit, {x:posX,y:posY,z:posZ}, it.color||'#888', xOffset);
+        addBox(fit,{x:fit.pos.x,y:fit.pos.y,z:fit.pos.z},it.color||'#888',xOffset);
         placed++; remaining--;
 
-        posX+=fit.l;
-        maxRowH=Math.max(maxRowH,fit.w);
-        if(posX+fit.l>size.length){
-          posX=0; posZ+=maxRowH;
-          maxRowH=0;
-        }
-        if(posZ+fit.w>size.width){
-          posZ=0; posY+=fit.h;
-        }
+        // split ruang kosong
+        const used=spaces.splice(fitIndex,1)[0];
+        spaces.push({x:used.x+fit.l,y:used.y,z:used.z,l:used.l-fit.l,h:fit.h,w:fit.w});
+        spaces.push({x:used.x,y:used.y+fit.h,z:used.z,l:fit.l,h:used.h-fit.h,w:fit.w});
+        spaces.push({x:used.x,y:used.y,z:used.z+fit.w,l:fit.l,h:fit.h,w:used.w-fit.w});
       }
-
       report.push(`${container.label} — ${it.model} ${it.size} → Placed: ${placed} | Missed: ${Math.max(0,it.qty-placed)}`);
     }
 
