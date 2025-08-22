@@ -53,8 +53,8 @@
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
   <script>
   // ------------------ CONFIG ------------------
-  const LOGIC_GAP = 0;   
-  const VISUAL_GAP = 2;  
+  const LOGIC_GAP = 0;   // gap hitungan kapasitas (nol)
+  const VISUAL_GAP = 2;  // gap render visual
 
   const containerSizeMap = {
     "20FT (GP)": { length: 5898, width: 2352, height: 2393 },
@@ -111,103 +111,143 @@
     ];
     const uniq = new Set(); const out=[];
     for(const p of perms){ const k=`${p.l}|${p.w}|${p.h}`; if(!uniq.has(k)){ uniq.add(k); out.push(p); } }
-    out.sort((a,b)=> (b.h-a.h) || ((b.l*b.w)-(a.l*a.w)) );
+    out.sort((a,b)=> (a.h-b.h) || ((b.l*b.w)-(a.l*a.w)) );
     return out;
   }
 
-  // ------------------ PACKING ------------------
-  function packContainer(container){
-    const size = containerSizeMap[container.type];
-    const xOffset = container.index===0 ? 0
-      : containerOffsets[container.index-1] + containerSizeMap[data[container.index-1].type].length + 500;
-    containerOffsets[container.index] = xOffset + size.length;
+  // ------------------ PACKING (Guillotine heuristic) ------------------
+// ------------------ PACKING (Tangga Conditional, Anti-leak) ------------------
+function packContainer(container){
+  const size = containerSizeMap[container.type];
+  const xOffset = container.index===0 ? 0
+    : containerOffsets[container.index-1] + containerSizeMap[data[container.index-1].type].length + 500;
+  containerOffsets[container.index] = xOffset + size.length;
 
-    // wireframe container
-    const wireGeo = new THREE.BoxGeometry(size.length, size.height, size.width);
-    const wire = new THREE.LineSegments(new THREE.EdgesGeometry(wireGeo), new THREE.LineBasicMaterial({color:0x000000}));
-    wire.position.set(xOffset + size.length/2, size.height/2, size.width/2);
-    mainGroup.add(wire);
+  const wireGeo = new THREE.BoxGeometry(size.length, size.height, size.width);
+  const wire = new THREE.LineSegments(new THREE.EdgesGeometry(wireGeo), new THREE.LineBasicMaterial({color:0x000000}));
+  wire.position.set(xOffset + size.length/2, size.height/2, size.width/2);
+  mainGroup.add(wire);
 
-    // sort: besar → kecil
-    const items = container.items.map(it=>({
-      ...it,
-      dims: { l: it.dimensions.length, w: it.dimensions.width, h: it.dimensions.height },
-      qty: parseInt(it.qty) || 0
-    })).filter(it=>it.qty>0)
-      .sort((a,b)=> (b.dims.l*b.dims.w*b.dims.h) - (a.dims.l*a.dims.w*a.dims.h));
+  let spaces = [{ x:0, y:0, z:0, l:size.length, h:size.height, w:size.width }];
 
-    const report = [];
-    let posX=0, posY=0, posZ=0, layerH=0;
+  const items = container.items.map(it=>({
+    ...it,
+    dims: { l: it.dimensions.length, w: it.dimensions.width, h: it.dimensions.height }
+  })).sort((a,b)=>{
+    const areaA = a.dims.l * a.dims.w;
+    const areaB = b.dims.l * b.dims.w;
+    if(areaB !== areaA) return areaB - areaA; // luas alas besar dulu
+    return b.dims.h - a.dims.h; // kalau sama, pilih yang lebih tinggi
+  });
 
-    for(const it of items){
-      let remaining = it.qty, placed=0;
-      const rots = getAllRotations(it.dims);
 
-      while(remaining>0){
-        let fit=null;
-        for(const r of rots){
-          if(posX+r.l<=size.length && posY+r.h<=size.height && posZ+r.w<=size.width){ fit=r; break; }
-        }
-        if(!fit){
-          posZ+=layerH; 
-          if(posZ>=size.width){ posZ=0; posX+=it.dims.l; layerH=0; }
-          if(posX>=size.length){ posX=0; posY+=it.dims.h; }
-          if(posY>=size.height) break;
-          continue;
-        }
+  const report = [];
+  const VISUAL_GAP = 1; // supaya garis box tidak menempel ke garis container
 
-        addBox(fit, {x:posX,y:posY,z:posZ}, it.color||'#888', xOffset);
-        placed++; remaining--;
+  for(const it of items){
+    let remaining = it.qty | 0; if(!remaining) continue;
+    let placed = 0;
+    const rots = getAllRotations(it.dims);
+    let bestRot = rots[0];
+    let bestCap = 0;
+    for(const r of rots){
+      const cap = Math.floor(size.length/r.l)*Math.floor(size.width/r.w)*Math.floor(size.height/r.h);
+      if(cap>bestCap){ bestCap = cap; bestRot = r; }
+    }
 
-        posX+=fit.l;
-        layerH=Math.max(layerH,fit.w);
+    while(remaining>0){
+      let si = -1;
+      for(let i=0;i<spaces.length;i++){
+        const s = spaces[i];
+        if(s.l>=bestRot.l && s.w>=bestRot.w && s.h>=bestRot.h){ si=i; break; }
+      }
+      if(si===-1) break;
+      const s = spaces.splice(si,1)[0];
 
-        if(posX+fit.l>size.length){
-          posX=0; posZ+=layerH; layerH=0;
-        }
-        if(posZ+fit.w>size.width){
-          posZ=0; posY+=fit.h;
+      const nx = Math.floor(s.l / (bestRot.l + LOGIC_GAP));
+      const ny = Math.floor(s.h / (bestRot.h + LOGIC_GAP));
+      const nz = Math.floor(s.w / (bestRot.w + LOGIC_GAP));
+      const blockCount = nx*ny*nz;
+      if(blockCount===0) continue;
+      const toPlace = Math.min(blockCount, remaining);
+
+      let placedHere = 0;
+      const stairMode = blockCount < (Math.floor(size.length/bestRot.l) * Math.floor(size.width/bestRot.w) * Math.floor(size.height/bestRot.h));
+
+      outer: for(let y=0;y<ny;y++){           // bawah ke atas
+        for(let x=0;x<nx;x++){                // depan ke belakang
+          for(let z=0;z<nz;z++){              // kiri ke kanan
+            if(placedHere>=toPlace) break outer;
+
+            let xStairOffset = 0;
+            if(stairMode) xStairOffset = y * (bestRot.l / 2);
+
+            const posX = s.x + x*(bestRot.l + LOGIC_GAP) + xStairOffset + VISUAL_GAP;
+            const posY = s.y + y*(bestRot.h + LOGIC_GAP) + VISUAL_GAP;
+            const posZ = s.z + z*(bestRot.w + LOGIC_GAP) + VISUAL_GAP;
+
+            // Clamp: jangan sampai lewat container
+            if(posX + bestRot.l > size.length || posZ + bestRot.w > size.width || posY + bestRot.h > size.height){
+              continue;
+            }
+
+            addBox(bestRot, { x:posX, y:posY, z:posZ }, it.color || '#888', xOffset);
+
+            placed++; placedHere++; remaining--;
+          }
         }
       }
 
-      report.push(`${container.label} — ${it.model} ${it.size} → Placed: ${placed} | Missed: ${Math.max(0,it.qty-placed)}`);
+      const usedL = Math.min(nx*bestRot.l, s.l);
+      const usedH = Math.min(ny*bestRot.h, s.h);
+      const usedW = Math.min(nz*bestRot.w, s.w);
+
+      const right = { x:s.x + usedL, y:s.y, z:s.z, l:s.l - usedL, h:usedH, w:usedW };
+      const front = { x:s.x, y:s.y, z:s.z + usedW, l:usedL, h:usedH, w:s.w - usedW };
+      const top   = { x:s.x, y:s.y + usedH, z:s.z, l:s.l, h:s.h - usedH, w:s.w };
+      for(const sp of [right, front, top]){
+        if(sp.l>0 && sp.h>0 && sp.w>0) spaces.push(sp);
+      }
     }
 
-    return report.join('\n');
+    report.push(`${container.label} — ${it.model} ${it.size} → Placed: ${placed} | Failed: ${Math.max(0,(it.qty|0)-placed)}`);
   }
 
-  // ------------------ CORE ------------------
+  return report.join('\n');
+}
+
   function renderContainers(payload){
     clearScene(); containerOffsets = []; data = payload.map((c,i)=>({...c, index:i, label:`C${i+1}`}));
-    const reports=[]; for(const c of data){ reports.push(packContainer(c)); }
+    const reports = [];
+    for(const c of data){ reports.push(packContainer(c)); }
     showReport(reports.join('\n\n'));
   }
 
   function showReport(text){
-    const el=document.getElementById('reportContainer');
-    el.innerHTML='';
-    const box=document.createElement('div');
-    box.className='reportBox';
-    box.textContent=text||'—';
+    const el = document.getElementById('reportContainer');
+    el.innerHTML = '';
+    const box = document.createElement('div');
+    box.className = 'reportBox';
+    box.textContent = text || '—';
     el.appendChild(box);
   }
 
-  window.addEventListener('message',(event)=>{
-    if(event?.data?.type==='RENDER_CONTAINER'){
+  window.addEventListener('message', (event)=>{
+    if(event?.data?.type === 'RENDER_CONTAINER'){
       try{ renderContainers(event.data.payload); }
       catch(e){ console.error(e); showReport('Error: '+e.message); }
     }
   });
 
-  document.getElementById('btnClearCache').addEventListener('click',()=>{ localStorage.clear(); alert('Cache cleared'); });
+  document.getElementById('btnClearCache').addEventListener('click', ()=>{ localStorage.clear(); alert('Cache cleared'); });
 
   function onResize(){
-    const w=window.innerWidth,h=window.innerHeight;
-    renderer.setSize(w,h); camera.aspect=w/h; camera.updateProjectionMatrix();
+    const w = window.innerWidth, h = window.innerHeight;
+    renderer.setSize(w,h); camera.aspect = w/h; camera.updateProjectionMatrix();
   }
-  window.addEventListener('resize',onResize);
+  window.addEventListener('resize', onResize);
 
-  function animate(){ requestAnimationFrame(animate); controls.update(); renderer.render(scene,camera); }
+  function animate(){ requestAnimationFrame(animate); controls.update(); renderer.render(scene, camera); }
   animate();
   </script>
 </body>
