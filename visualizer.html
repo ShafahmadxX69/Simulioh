@@ -3,53 +3,23 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Container Visualizer – Auto Packing</title>
+  <title>Container Visualizer – Perfect Packing</title>
   <style>
-    :root{
-      --panel-bg:#f7f7f8; --border:#d8d8de;
-      --mono:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;
-    }
-    *{box-sizing:border-box}
-    body{margin:0;overflow:hidden;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}
+    body{margin:0;overflow:hidden;font-family:system-ui}
     canvas{display:block}
-    #sidebar{position:absolute;inset:0 auto 0 0;width:280px;background:var(--panel-bg);border-right:1px solid var(--border);z-index:10;padding:12px;overflow:auto}
-    #sidebar h3{margin:0 0 8px}
-    .containerBox{background:#fff;border:1px solid var(--border);border-radius:10px;padding:10px;margin-bottom:10px}
-    .muted{color:#666;font-size:12px}
-    #reportContainer{position:absolute;left:280px;right:0;bottom:0;background:rgba(255,255,255,0.96);border-top:2px solid #000;z-index:5;font-family:var(--mono);font-size:12px;max-height:35%;overflow:auto;display:flex;flex-wrap:wrap;gap:8px;padding:8px}
-    .reportBox{border:1px solid var(--border);background:#fff;border-radius:8px;padding:10px;white-space:pre-wrap;flex:1 1 280px}
-    #topbar{position:absolute;left:280px;right:0;top:0;height:46px;background:rgba(255,255,255,0.9);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;padding:0 10px;z-index:8;backdrop-filter:blur(4px)}
-    #topbar button{border:1px solid var(--border);background:#fff;padding:6px 10px;border-radius:8px;cursor:pointer;font-size:13px}
-    #topbar .spacer{flex:1}
-    #legend{font-family:var(--mono);font-size:11px;color:#444}
+    #reportContainer{position:absolute;left:0;right:0;bottom:0;
+      background:rgba(255,255,255,0.96);border-top:2px solid #000;
+      font-family:monospace;font-size:12px;max-height:35%;overflow:auto;
+      padding:8px;white-space:pre}
   </style>
 </head>
 <body>
-  <div id="sidebar">
-    <h3>Container List</h3>
-    <div id="containerList"></div>
-    <div id="legend" class="muted">
-      <p><strong>Legend:</strong></p>
-      <p>- X: depan → belakang (panjang)<br>
-         - Y: lantai → atas (tinggi)<br>
-         - Z: kiri → kanan (lebar)</p>
-      <p>- GAP visual: 2 mm</p>
-    </div>
-  </div>
-
-  <div id="topbar">
-    <button id="btnClearCache">Clear Cache</button>
-    <label class="muted">Mode: Auto Packing (big items below)</label>
-    <div class="spacer"></div>
-  </div>
-
-  <div id="reportContainer"></div>
   <canvas id="threeCanvas"></canvas>
+  <div id="reportContainer"></div>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
   <script>
-  const LOGIC_GAP = 0;
   const VISUAL_GAP = 2;
 
   const containerSizeMap = {
@@ -64,140 +34,105 @@
   camera.position.set(9000, 6000, 9000);
 
   const renderer = new THREE.WebGLRenderer({ canvas: document.querySelector('#threeCanvas'), antialias: true });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(window.innerWidth, window.innerHeight);
 
   const controls = new THREE.OrbitControls(camera, renderer.domElement);
-  controls.enableDamping = true; controls.dampingFactor = 0.08;
+  controls.enableDamping = true;
 
-  const ambient = new THREE.AmbientLight(0xffffff, 0.9); scene.add(ambient);
-  const dir = new THREE.DirectionalLight(0xffffff, 0.6); dir.position.set(1,2,1); scene.add(dir);
+  scene.add(new THREE.AmbientLight(0xffffff,0.9));
+  const dir = new THREE.DirectionalLight(0xffffff,0.6); dir.position.set(1,2,1); scene.add(dir);
 
   const mainGroup = new THREE.Group(); scene.add(mainGroup);
-  let containerOffsets = [], data = [];
 
-  function clearScene(){ mainGroup.clear(); }
-
-  function withOutline(mesh, color = 0x000000){
+  function withOutline(mesh){
     const edges = new THREE.EdgesGeometry(mesh.geometry);
-    const line  = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color }));
+    const line  = new THREE.LineSegments(edges,new THREE.LineBasicMaterial({color:0x000}));
     mesh.add(line); return mesh;
   }
 
-  function addBox(dim, pos, color, xOffset){
+  function addBox(dim,pos,color,xOffset){
     const geometry = new THREE.BoxGeometry(
-      Math.max(1, dim.l - VISUAL_GAP),
-      Math.max(1, dim.h - VISUAL_GAP),
-      Math.max(1, dim.w - VISUAL_GAP)
+      dim.l-VISUAL_GAP, dim.h-VISUAL_GAP, dim.w-VISUAL_GAP
     );
-    const material = new THREE.MeshStandardMaterial({ color: new THREE.Color(color), transparent:false, opacity:0.97 });
-    const box = new THREE.Mesh(geometry, material);
-    box.position.set(pos.x + dim.l/2 + xOffset, pos.y + dim.h/2, pos.z + dim.w/2);
-    withOutline(box, 0x111111);
+    const material = new THREE.MeshStandardMaterial({ color:new THREE.Color(color), opacity:0.97 });
+    const box = new THREE.Mesh(geometry,material);
+    box.position.set(pos.x+dim.l/2+xOffset,pos.y+dim.h/2,pos.z+dim.w/2);
+    withOutline(box);
     mainGroup.add(box);
   }
 
   function getAllRotations(dim){
-    const L = dim.length ?? dim.l, W = dim.width ?? dim.w, H = dim.height ?? dim.h;
-    const perms = [
+    const {length:L,width:W,height:H} = dim;
+    return [
       {l:L,w:W,h:H},{l:L,w:H,h:W},
       {l:W,w:L,h:H},{l:W,w:H,h:L},
       {l:H,w:L,h:W},{l:H,w:W,h:L}
     ];
-    const uniq = new Set(); const out=[];
-    for(const p of perms){ const k=`${p.l}|${p.w}|${p.h}`; if(!uniq.has(k)){ uniq.add(k); out.push(p); } }
-    return out;
   }
 
-  function packContainer(container){
+  function packContainer(container,index){
     const size = containerSizeMap[container.type];
-    const xOffset = container.index===0 ? 0
-      : containerOffsets[container.index-1] + containerSizeMap[data[container.index-1].type].length + 500;
-    containerOffsets[container.index] = xOffset + size.length;
+    const xOffset = index===0?0:index* (size.length+500);
 
-    const wireGeo = new THREE.BoxGeometry(size.length, size.height, size.width);
-    const wire = new THREE.LineSegments(new THREE.EdgesGeometry(wireGeo), new THREE.LineBasicMaterial({color:0x000000}));
-    wire.position.set(xOffset + size.length/2, size.height/2, size.width/2);
+    // wireframe kontainer
+    const wireGeo = new THREE.BoxGeometry(size.length,size.height,size.width);
+    const wire = new THREE.LineSegments(new THREE.EdgesGeometry(wireGeo),new THREE.LineBasicMaterial({color:0x000000}));
+    wire.position.set(xOffset+size.length/2,size.height/2,size.width/2);
     mainGroup.add(wire);
 
-    let spaces = [{ x:0, y:0, z:0, l:size.length, h:size.height, w:size.width }];
-    const items = container.items.map(it=>({
-      ...it,
-      dims: { l: it.dimensions.length, w: it.dimensions.width, h: it.dimensions.height }
-    }));
+    // expand semua items → jadi satu list box
+    let jobs = [];
+    for(const it of container.items){
+      const rots = getAllRotations(it.dimensions);
+      // ambil rotasi dengan volume optimal (supaya efisien)
+      let best = rots[0];
+      for(const r of rots){ if(r.l*r.w*r.h < best.l*best.w*best.h) best=r; }
+      for(let i=0;i<it.qty;i++) jobs.push({...it, dims:best});
+    }
+    // urutkan volume besar → kecil
+    jobs.sort((a,b)=>(b.dims.l*b.dims.w*b.dims.h)-(a.dims.l*a.dims.w*a.dims.h));
 
-    // sort by volume descending (besar duluan)
-    items.sort((a,b)=> (b.dims.l*b.dims.w*b.dims.h) - (a.dims.l*a.dims.w*a.dims.h));
+    let posX=0,posY=0,posZ=0,rowHeight=0,lineDepth=0;
+    let report = [];
 
-    const report = [];
-
-    for(const it of items){
-      let remaining = it.qty | 0; if(!remaining) continue;
-      let placed = 0;
-      const rots = getAllRotations(it.dims);
-
-      while(remaining>0){
-        // pilih space dengan y terendah (lantai prioritas)
-        spaces.sort((a,b)=> a.y - b.y || a.x - b.x || a.z - b.z);
-        let si = -1, chosenRot=null;
-        for(let i=0;i<spaces.length;i++){
-          for(const r of rots){
-            if(spaces[i].l>=r.l && spaces[i].w>=r.w && spaces[i].h>=r.h){ si=i; chosenRot=r; break; }
-          }
-          if(si!==-1) break;
-        }
-        if(si===-1) break;
-        const s = spaces.splice(si,1)[0];
-
-        const posX = s.x, posY = s.y, posZ = s.z;
-        addBox(chosenRot, { x:posX, y:posY, z:posZ }, it.color || '#888', xOffset);
-        placed++; remaining--;
-
-        // buat ruang sisa (kanan, depan, atas)
-        const right = { x:posX+chosenRot.l, y:posY, z:posZ, l:s.l - chosenRot.l, h:chosenRot.h, w:chosenRot.w };
-        const front = { x:posX, y:posY, z:posZ+chosenRot.w, l:chosenRot.l, h:chosenRot.h, w:s.w - chosenRot.w };
-        const top   = { x:posX, y:posY+chosenRot.h, z:posZ, l:chosenRot.l, h:s.h - chosenRot.h, w:chosenRot.w };
-        for(const sp of [right,front,top]){ if(sp.l>0&&sp.h>0&&sp.w>0) spaces.push(sp); }
+    for(const job of jobs){
+      const {l,w,h} = job.dims;
+      // kalau overflow lebar → geser Z
+      if(posZ+w>size.width){
+        posZ=0; posX+=lineDepth; lineDepth=0;
+      }
+      // kalau overflow panjang → naik Y
+      if(posX+l>size.length){
+        posX=0; posZ=0; posY+=rowHeight; rowHeight=0;
+      }
+      if(posY+h>size.height) {
+        report.push(`Gagal place ${job.model}`); continue;
       }
 
-      report.push(`${container.label} — ${it.model} ${it.size} → Placed: ${placed} | Failed: ${(it.qty|0)-placed}`);
+      addBox(job.dims,{x:posX,y:posY,z:posZ},job.color||'#888',xOffset);
+      posZ+=w; 
+      lineDepth=Math.max(lineDepth,l);
+      rowHeight=Math.max(rowHeight,h);
+      report.push(`Placed ${job.model} at (${posX},${posY},${posZ})`);
     }
-
-    return report.join('\n');
+    return report.join("\n");
   }
 
   function renderContainers(payload){
-    clearScene(); containerOffsets = []; data = payload.map((c,i)=>({...c, index:i, label:`C${i+1}`}));
-    const reports = [];
-    for(const c of data){ reports.push(packContainer(c)); }
-    showReport(reports.join('\n\n'));
+    mainGroup.clear();
+    let reports=[];
+    payload.forEach((c,i)=>{reports.push(packContainer(c,i));});
+    document.getElementById("reportContainer").textContent=reports.join("\n\n");
   }
 
-  function showReport(text){
-    const el = document.getElementById('reportContainer');
-    el.innerHTML = '';
-    const box = document.createElement('div');
-    box.className = 'reportBox';
-    box.textContent = text || '—';
-    el.appendChild(box);
-  }
-
-  window.addEventListener('message', (event)=>{
-    if(event?.data?.type === 'RENDER_CONTAINER'){
-      try{ renderContainers(event.data.payload); }
-      catch(e){ console.error(e); showReport('Error: '+e.message); }
+  // listener pesan eksternal
+  window.addEventListener("message",(ev)=>{
+    if(ev.data?.type==="RENDER_CONTAINER"){
+      renderContainers(ev.data.payload);
     }
   });
 
-  document.getElementById('btnClearCache').addEventListener('click', ()=>{ localStorage.clear(); alert('Cache cleared'); });
-
-  function onResize(){
-    const w = window.innerWidth, h = window.innerHeight;
-    renderer.setSize(w,h); camera.aspect = w/h; camera.updateProjectionMatrix();
-  }
-  window.addEventListener('resize', onResize);
-
-  function animate(){ requestAnimationFrame(animate); controls.update(); renderer.render(scene, camera); }
+  function animate(){ requestAnimationFrame(animate); controls.update(); renderer.render(scene,camera);}
   animate();
   </script>
 </body>
