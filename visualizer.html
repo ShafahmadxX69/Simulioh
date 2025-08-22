@@ -81,9 +81,6 @@
   const mainGroup = new THREE.Group(); scene.add(mainGroup);
   let containerOffsets = [], data = [];
 
-  // global collector supaya input tidak hilang
-  let allPayloads = [];
-
   function clearScene(){ mainGroup.clear(); }
 
   function withOutline(mesh, color = 0x000000){
@@ -118,103 +115,102 @@
     return out;
   }
 
-  // ------------------ PACKING ------------------
-  function packContainer(container){
-    const size = containerSizeMap[container.type];
-    const xOffset = container.index===0 ? 0
-      : containerOffsets[container.index-1] + containerSizeMap[data[container.index-1].type].length + 500;
-    containerOffsets[container.index] = xOffset + size.length;
+  // ------------------ PACKING (Guillotine heuristic) ------------------
+// ------------------ PACKING (Tangga Conditional, Anti-leak) ------------------
+<script>
+// ------------------ PACKING (Tangga, Prioritas Besar di Bawah) ------------------
+function packContainer(container){
+  const size = containerSizeMap[container.type];
+  const xOffset = container.index===0 ? 0
+    : containerOffsets[container.index-1] + containerSizeMap[data[container.index-1].type].length + 500;
+  containerOffsets[container.index] = xOffset + size.length;
 
-    const wireGeo = new THREE.BoxGeometry(size.length, size.height, size.width);
-    const wire = new THREE.LineSegments(new THREE.EdgesGeometry(wireGeo), new THREE.LineBasicMaterial({color:0x000000}));
-    wire.position.set(xOffset + size.length/2, size.height/2, size.width/2);
-    mainGroup.add(wire);
+  // wireframe kontainer
+  const wireGeo = new THREE.BoxGeometry(size.length, size.height, size.width);
+  const wire = new THREE.LineSegments(new THREE.EdgesGeometry(wireGeo), new THREE.LineBasicMaterial({color:0x000000}));
+  wire.position.set(xOffset + size.length/2, size.height/2, size.width/2);
+  mainGroup.add(wire);
 
-    let spaces = [{ x:0, y:0, z:0, l:size.length, h:size.height, w:size.width }];
+  let spaces = [{ x:0, y:0, z:0, l:size.length, h:size.height, w:size.width }];
 
-    // sort item berdasarkan volume besar → kecil
-    const items = container.items.map(it=>({
-      ...it,
-      dims: { l: it.dimensions.length, w: it.dimensions.width, h: it.dimensions.height }
-    })).sort((a,b)=> (b.dims.l*b.dims.w*b.dims.h) - (a.dims.l*a.dims.w*a.dims.h));
+  // urutkan box → volume besar dulu, jadi fondasi
+  const items = container.items.map(it=>({
+    ...it,
+    dims: { l: it.dimensions.length, w: it.dimensions.width, h: it.dimensions.height }
+  })).sort((a,b)=> (b.dims.l*b.dims.w*b.dims.h) - (a.dims.l*a.dims.w*a.dims.h));
 
-    const report = [];
-    const VISUAL_GAP = 1;
+  const report = [];
+  const VISUAL_GAP = 1;
 
-    for(const it of items){
-      let remaining = it.qty | 0; if(!remaining) continue;
-      let placed = 0;
-      const rots = getAllRotations(it.dims);
-      let bestRot = rots[0];
-      let bestCap = 0;
-      for(const r of rots){
-        const cap = Math.floor(size.length/r.l)*Math.floor(size.width/r.w)*Math.floor(size.height/r.h);
-        if(cap>bestCap){ bestCap = cap; bestRot = r; }
-      }
+  for(const it of items){
+    let remaining = it.qty|0; if(!remaining) continue;
+    let placed = 0;
 
-      while(remaining>0){
-        let si = -1;
-        for(let i=0;i<spaces.length;i++){
-          const s = spaces[i];
-          if(s.l>=bestRot.l && s.w>=bestRot.w && s.h>=bestRot.h){ si=i; break; }
-        }
-        if(si===-1) break;
-        const s = spaces.splice(si,1)[0];
-
-        const nx = Math.floor(s.l / (bestRot.l + LOGIC_GAP));
-        const ny = Math.floor(s.h / (bestRot.h + LOGIC_GAP));
-        const nz = Math.floor(s.w / (bestRot.w + LOGIC_GAP));
-        const blockCount = nx*ny*nz;
-        if(blockCount===0) continue;
-        const toPlace = Math.min(blockCount, remaining);
-
-        let placedHere = 0;
-        const stairMode = blockCount < (Math.floor(size.length/bestRot.l) * Math.floor(size.width/bestRot.w) * Math.floor(size.height/bestRot.h));
-
-        outer: for(let y=0;y<ny;y++){
-          for(let x=0;x<nx;x++){
-            for(let z=0;z<nz;z++){
-              if(placedHere>=toPlace) break outer;
-
-              let xStairOffset = 0;
-              if(stairMode) xStairOffset = y * (bestRot.l / 2);
-
-              const posX = s.x + x*(bestRot.l + LOGIC_GAP) + xStairOffset + VISUAL_GAP;
-              const posY = s.y + y*(bestRot.h + LOGIC_GAP) + VISUAL_GAP;
-              const posZ = s.z + z*(bestRot.w + LOGIC_GAP) + VISUAL_GAP;
-
-              if(posX + bestRot.l > size.length || posZ + bestRot.w > size.width || posY + bestRot.h > size.height){
-                continue;
-              }
-
-              addBox(bestRot, { x:posX, y:posY, z:posZ }, it.color || '#888', xOffset);
-
-              placed++; placedHere++; remaining--;
-            }
-          }
-        }
-
-        const usedL = Math.min(nx*bestRot.l, s.l);
-        const usedH = Math.min(ny*bestRot.h, s.h);
-        const usedW = Math.min(nz*bestRot.w, s.w);
-
-        const right = { x:s.x + usedL, y:s.y, z:s.z, l:s.l - usedL, h:usedH, w:usedW };
-        const front = { x:s.x, y:s.y, z:s.z + usedW, l:usedL, h:usedH, w:s.w - usedW };
-        const top   = { x:s.x, y:s.y + usedH, z:s.z, l:s.l, h:s.h - usedH, w:s.w };
-        for(const sp of [right, front, top]){
-          if(sp.l>0 && sp.h>0 && sp.w>0) spaces.push(sp);
-        }
-      }
-
-      report.push(`${container.label} — ${it.model} ${it.size} → Placed: ${placed} | Failed: ${Math.max(0,(it.qty|0)-placed)}`);
+    // pilih rotasi terbaik untuk kapasitas
+    const rots = getAllRotations(it.dims);
+    let bestRot = rots[0], bestCap=0;
+    for(const r of rots){
+      const cap = Math.floor(size.length/r.l)*Math.floor(size.width/r.w)*Math.floor(size.height/r.h);
+      if(cap>bestCap){ bestCap=cap; bestRot=r; }
     }
 
-    return report.join('\n');
-  }
+    while(remaining>0){
+      let si=-1;
+      for(let i=0;i<spaces.length;i++){
+        const s=spaces[i];
+        if(s.l>=bestRot.l && s.w>=bestRot.w && s.h>=bestRot.h){ si=i; break; }
+      }
+      if(si===-1) break;
+      const s=spaces.splice(si,1)[0];
 
-  // render ulang semua payload tersimpan
-  function renderAllContainers(){
-    clearScene(); containerOffsets = []; data = allPayloads.map((c,i)=>({...c, index:i, label:`C${i+1}`}));
+      const nx=Math.floor(s.l/(bestRot.l+LOGIC_GAP));
+      const ny=Math.floor(s.h/(bestRot.h+LOGIC_GAP));
+      const nz=Math.floor(s.w/(bestRot.w+LOGIC_GAP));
+      const blockCount=nx*ny*nz;
+      if(blockCount===0) continue;
+      const toPlace=Math.min(blockCount,remaining);
+
+      let placedHere=0;
+      outer: for(let y=0;y<ny;y++){       // tinggi
+        for(let x=0;x<nx;x++){            // panjang
+          for(let z=0;z<nz;z++){          // lebar
+            if(placedHere>=toPlace) break outer;
+
+            // mode tangga: jika masih ada ruang di atas → geser setengah box tiap layer
+            const stairX = (y>0)? Math.floor(y*(bestRot.l/2)) : 0;
+            const stairZ = (y>0)? Math.floor(y*(bestRot.w/2)) : 0;
+
+            const posX=s.x+x*(bestRot.l+LOGIC_GAP)+stairX+VISUAL_GAP;
+            const posY=s.y+y*(bestRot.h+LOGIC_GAP)+VISUAL_GAP;
+            const posZ=s.z+z*(bestRot.w+LOGIC_GAP)+stairZ+VISUAL_GAP;
+
+            if(posX+bestRot.l>size.length || posZ+bestRot.w>size.width || posY+bestRot.h>size.height) continue;
+
+            addBox(bestRot,{x:posX,y:posY,z:posZ},it.color||'#888',xOffset);
+
+            placed++; placedHere++; remaining--;
+          }
+        }
+      }
+
+      const usedL=Math.min(nx*bestRot.l,s.l);
+      const usedH=Math.min(ny*bestRot.h,s.h);
+      const usedW=Math.min(nz*bestRot.w,s.w);
+
+      const right={x:s.x+usedL,y:s.y,z:s.z,l:s.l-usedL,h:usedH,w:usedW};
+      const front={x:s.x,y:s.y,z:s.z+usedW,l:usedL,h:usedH,w:s.w-usedW};
+      const top={x:s.x,y:s.y+usedH,z:s.z,l:s.l,h:s.h-usedH,w:s.w};
+      for(const sp of [right,front,top]){ if(sp.l>0&&sp.h>0&&sp.w>0) spaces.push(sp); }
+    }
+
+    report.push(`${container.label} — ${it.model} ${it.size} → Placed: ${placed} | Failed: ${Math.max(0,(it.qty|0)-placed)}`);
+  }
+  return report.join('\n');
+}
+</script>
+
+  function renderContainers(payload){
+    clearScene(); containerOffsets = []; data = payload.map((c,i)=>({...c, index:i, label:`C${i+1}`}));
     const reports = [];
     for(const c of data){ reports.push(packContainer(c)); }
     showReport(reports.join('\n\n'));
@@ -231,21 +227,12 @@
 
   window.addEventListener('message', (event)=>{
     if(event?.data?.type === 'RENDER_CONTAINER'){
-      try{ 
-        // tambahkan payload baru ke global list
-        allPayloads.push(...event.data.payload);
-        renderAllContainers();
-      }
+      try{ renderContainers(event.data.payload); }
       catch(e){ console.error(e); showReport('Error: '+e.message); }
     }
   });
 
-  document.getElementById('btnClearCache').addEventListener('click', ()=>{ 
-    localStorage.clear(); 
-    allPayloads = []; 
-    clearScene(); 
-    showReport("Cache cleared. Semua data terhapus.");
-  });
+  document.getElementById('btnClearCache').addEventListener('click', ()=>{ localStorage.clear(); alert('Cache cleared'); });
 
   function onResize(){
     const w = window.innerWidth, h = window.innerHeight;
