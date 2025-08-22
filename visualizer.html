@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+<!DOCTYPE html> 
 <html lang="en">
 <head>
   <meta charset="UTF-8"/>
@@ -135,11 +135,13 @@
       .sort((a,b)=> (b.dims.l*b.dims.w*b.dims.h) - (a.dims.l*a.dims.w*a.dims.h));
 
     const report = [];
+
+    // 🔑 Posisi global per container (bukan per item)
+    let posX=0, posY=0, posZ=0, maxRowH=0;
+
     for(const it of items){
       let remaining = it.qty, placed=0;
       const rots = getAllRotations(it.dims);
-
-      let posX=0,posY=0,posZ=0,maxRowH=0;
 
       while(remaining>0){
         let fit=null;
