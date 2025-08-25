@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Container Visualizer – Auto Rotation & Mixed Row Optimizer</title>
+  <title>Container Visualizer – Auto Rotation & Mixed Items (Multi-Container)</title>
   <style>
     :root{
       --panel-bg:#f7f7f8; --border:#d8d8de;
@@ -19,7 +19,7 @@
     .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
     .tag{border:1px solid var(--border);border-radius:999px;padding:2px 8px;font-size:12px;background:#fff}
     #reportContainer{position:absolute;left:280px;right:0;bottom:0;background:rgba(255,255,255,0.96);border-top:2px solid #000;z-index:5;font-family:var(--mono);font-size:12px;max-height:35%;overflow:auto;display:flex;flex-wrap:wrap;gap:8px;padding:8px}
-    .reportBox{border:1px solid var(--border);background:#fff;border-radius:8px;padding:10px;white-space:pre-wrap;flex:1 1 280px}
+    .reportBox{border:1px solid var(--border);background:#fff;border-radius:8px;padding:10px;white-space:pre-wrap;flex:1 1 320px}
     #topbar{position:absolute;left:280px;right:0;top:0;height:46px;background:rgba(255,255,255,0.9);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;padding:0 10px;z-index:8;backdrop-filter:blur(4px)}
     #topbar button,#topbar select{border:1px solid var(--border);background:#fff;padding:6px 10px;border-radius:8px;cursor:pointer;font-size:13px}
     #topbar .spacer{flex:1}
@@ -35,14 +35,14 @@
       <p>- X: depan → belakang (panjang)<br>
          - Y: lantai → atas (tinggi)<br>
          - Z: kiri → kanan (lebar)</p>
-      <p>- GAP visual: 0 mm</p>
+      <p>- GAP logika: 0 mm (kapasitas penuh)<br>- Visual shrink: 0.5 mm (anti nembus)</p>
     </div>
   </div>
 
   <div id="topbar">
     <button id="btnRenderDummy" title="Render contoh payload">Render Dummy</button>
     <button id="btnClearCache" title="Hapus cache lokal">Clear Cache</button>
-    <label class="muted">Mode: Auto (uji semua rotasi & mix)</label>
+    <label class="muted">Mode: Auto (rotasi & mix multi-item, multi-container)</label>
     <div class="spacer"></div>
     <span class="muted">Tip: kirim payload via <code>postMessage</code> → { type:"RENDER_CONTAINER", payload }</span>
   </div>
@@ -54,8 +54,12 @@
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
   <script>
   // ------------------ CONFIG ------------------
-  const GAP = 0; // mm (visual gap, ikut perhitungan supaya konsisten)
-  // NOTE: pakai ukuran seperti skrip-mu sebelumnya agar kompatibel (eksternal-ish).
+  // Kapasitas pakai ukuran yang kamu gunakan (kompatibel dengan Index yang map-nya "20FT (GP)" dst).
+  const LOGIC_GAP = 0;             // Tidak ada gap pada perhitungan kapasitas
+  const VISUAL_SHRINK = 0.5;       // Epsilon untuk cegah z-fighting
+  const CONTAINER_SPACING = 500;   // Jarak antar kontainer saat dirender berdampingan
+  const ENABLE_CACHE = true;
+
   const containerSizeMap = {
     "20FT (GP)": { length: 5898, width: 2352, height: 2393 },
     "40FT (GP)": { length: 12032, width: 2352, height: 2393 },
@@ -79,14 +83,14 @@
   const dir = new THREE.DirectionalLight(0xffffff, 0.6); dir.position.set(1,2,1); scene.add(dir);
 
   const mainGroup = new THREE.Group(); scene.add(mainGroup);
-  let boxMeshes = [], containerOffsets = [], data = [];
+  let containerOffsets = [], data = [];
 
   // ------------------ UTIL ------------------
   function hashPayload(payload){
     try{ return btoa(unescape(encodeURIComponent(JSON.stringify(payload)))).slice(0,160); }
     catch{ return String(Date.now()); }
   }
-  function clearScene(){ mainGroup.clear(); boxMeshes = []; }
+  function clearScene(){ mainGroup.clear(); }
 
   function withOutline(mesh, color = 0x000000){
     const edges = new THREE.EdgesGeometry(mesh.geometry);
@@ -94,323 +98,33 @@
     mesh.add(line); return mesh;
   }
 
-  function addBox(dim, pos, color, key){
-    const geometry = new THREE.BoxGeometry(Math.max(1, dim.l - GAP), Math.max(1, dim.h - GAP), Math.max(1, dim.w - GAP));
-    const material = new THREE.MeshStandardMaterial({ color: new THREE.Color(color), transparent:false, opacity:0.95 });
-    const box = new THREE.Mesh(geometry, material);
-    box.position.set(pos[0], pos[1], pos[2]);
-    box.userData.key = key;
-    withOutline(box, 0x000000);
-    mainGroup.add(box); boxMeshes.push(box);
-  }
-
-  function drawFromCache(boxDataArray, containers){
-    clearScene(); containerOffsets = [];
-    containers.forEach((c,i)=>drawContainerWireframe(c.type,i));
-    boxDataArray.forEach(d=> addBox({l:d.l,h:d.h,w:d.w}, d.position, d.color, d.key));
-  }
-
-  // ------------------ CORE RENDER ------------------
-  function renderFromData(payload,{useCache=true}={}){
-    const reportEl = document.getElementById('reportContainer');
-    const listEl   = document.getElementById('containerList');
-
-    const hash = hashPayload(payload);
-    const cacheKey = `cachedBoxes_${hash}`;
-    if(useCache){
-      const cached = localStorage.getItem(cacheKey);
-      if(cached){
-        const parsed = JSON.parse(cached);
-        drawFromCache(parsed.boxes, parsed.containers);
-        listEl.innerHTML = buildSidebar(payload);
-        reportEl.innerHTML = buildReport(parsed.stats);
-        return;
-      }
-    }
-
-    clearScene(); reportEl.innerHTML=''; listEl.innerHTML='';
-    data = payload; containerOffsets = [];
-
-    const allBoxes = []; const globalStats = [];
-
-    payload.forEach((containerObj, cIndex) => {
-      const container = drawContainerWireframe(containerObj.type, cIndex);
-      const failedMap = {};
-
-      // normalize items
-      const items = containerObj.items.map((i, idx) => ({
-        ...i,
-        qty: +i.qty || 0,
-        key: `${i.model || 'Item'} ${i.size ?? ''}" (C${cIndex+1}-L${idx+1})`
-      }));
-
-      const placed = autoPack(container, items, failedMap);
-      allBoxes.push(...placed.drawn);
-
-      globalStats.push({
-        containerIndex: cIndex+1,
-        type: containerObj.type,
-        placed: placed.countPlaced,
-        failed: placed.countFailed,
-        failedMap
-      });
+  function makeBoxMaterial(color){
+    return new THREE.MeshStandardMaterial({
+      color: new THREE.Color(color),
+      transparent: false,
+      opacity: 0.98,
+      polygonOffset: true,
+      polygonOffsetFactor: 1,
+      polygonOffsetUnits: 1
     });
-
-    localStorage.setItem(cacheKey, JSON.stringify({ boxes: allBoxes, containers: payload.map(p=>({type:p.type})), stats: globalStats }));
-    listEl.innerHTML = buildSidebar(payload);
-    reportEl.innerHTML = buildReport(globalStats);
   }
 
-  // ------------------ AUTO PACK (Front -> Back, Auto Rotation & Mix) ------------------
-  // Strategi:
-  // - Layer-by-layer di Y (lantai ke atas).
-  // - Di tiap layer: susun baris (Z) dari kiri ke kanan. Untuk setiap baris, uji SEMUA kandidat item+rotasi,
-  //   lalu cari kombinasi kolom (mix sampai 4 orientasi) yang mengisi lebar semaksimal mungkin (min leftover).
-  // - Untuk setiap kolom, susun sepanjang X (depan->belakang) sebanyak mungkin.
-  function autoPack(container, items, failedMap){
-    const size = container.size;
-    const drawn = [];
-    let countPlaced = 0, countFailed = 0;
+  function addBox(dim, pos, color, xOffset){
+    // Sedikit dikurangi untuk mencegah nembus dinding
+    const l = Math.max(1, dim.l - VISUAL_SHRINK);
+    const h = Math.max(1, dim.h - VISUAL_SHRINK);
+    const w = Math.max(1, dim.w - VISUAL_SHRINK);
 
-    // sort by volume desc agar item besar dipertimbangkan lebih dulu ketika ada banyak tipe
-    items.sort((a,b)=> vol(b.dimensions) - vol(a.dimensions));
+    const geometry = new THREE.BoxGeometry(l, h, w);
+    const material = makeBoxMaterial(color || '#888');
+    const box = new THREE.Mesh(geometry, material);
 
-    let y = 0;
-    while(true){
-      const remainQty = items.reduce((s,i)=>s+i.qty,0);
-      if(remainQty <= 0) break;
-
-      // cari tinggi minimal feasible (dari semua item & rotasi)
-      let minFeasibleH = Infinity;
-      for(const it of items){
-        if(it.qty<=0) continue;
-        for(const r of getAllRotations(it.dimensions)){
-          if(r.h + GAP <= size.height - y) minFeasibleH = Math.min(minFeasibleH, r.h);
-        }
-      }
-      if(!isFinite(minFeasibleH)) break; // tidak ada yang muat lagi
-
-      let z = 0; let layerTopY = y; let anyRow = false;
-
-      while(z < size.width - GAP){
-        // CARI ROW TERBAIK: pilih (item, kombinasi rotasi) yang memaksimalkan penggunaan lebar
-        let bestRow = null;
-
-        for(const it of items){
-          if(it.qty<=0) continue;
-
-          // rotasi yang muat tinggi & lebar sisa
-          const feasibleRots = getAllRotations(it.dimensions).filter(r => r.h + GAP <= (size.height - y) && r.w + GAP <= (size.width - z));
-          if(!feasibleRots.length) continue;
-
-          // pilih kombinasi kolom terbaik untuk it (bounded oleh qty)
-          const mix = bestRowMixWidthForItem(feasibleRots, size.width - z, size.height - y, it.qty);
-          if(!mix || !mix.cols.length) continue;
-
-          // skor: gunakan lebar sebanyak mungkin, leftover kecil, prefer tinggi baris kecil (agar lebih banyak layer muat)
-          const score = mix.usedWidth - (mix.leftover*10) - (mix.rowHeight*0.001);
-          if(!bestRow || score > bestRow.score){
-            bestRow = {
-              item: it,
-              cols: mix.cols,
-              rowHeight: mix.rowHeight,
-              usedWidth: mix.usedWidth,
-              leftover: mix.leftover,
-              score
-            };
-          }
-        }
-
-        if(!bestRow) break; // tidak ada row lagi yang muat di lebar sisa
-
-        // Tempatkan row ini (kolom demi kolom), isi sepanjang X
-        const shelfHeight = bestRow.rowHeight; // tinggi baris yang dipakai
-        if (y + shelfHeight > size.height) {
-          // coba muat kalau masih ada ruang < 1 item height (headspace kecil)
-          if (y + Math.min(shelfHeight, size.height - y) > size.height) break;
-        }
-
-        for(const col of bestRow.cols){
-          if(bestRow.item.qty <= 0) break;
-          const rot = col.rot;
-          const colWidth = rot.w + GAP;
-
-          // sepanjang X (depan->belakang)
-          let countX = Math.floor((size.length + GAP) / (rot.l + GAP));
-          if(countX < 1) countX = 1;
-
-          const placeCount = Math.min(countX, bestRow.item.qty);
-          if(placeCount <= 0) continue;
-
-          for(let i=0;i<placeCount;i++){
-            const x = (rot.l + GAP) * i;
-            const pos = [
-              container.xOffset + (rot.l/2) + x,          // X: depan -> belakang
-              y + (rot.h/2),                               // Y: lantai -> atas
-              z + (rot.w/2)                                // Z: kiri -> kanan
-            ];
-            const color = bestRow.item.color || colorFromKey(bestRow.item.key);
-            addBox({l:rot.l,h:rot.h,w:rot.w}, pos, color, bestRow.item.key);
-            drawn.push({ l:rot.l, h:rot.h, w:rot.w, color, position: pos, key: bestRow.item.key });
-            countPlaced++;
-          }
-          bestRow.item.qty -= placeCount;
-          z += colWidth;
-          if(z > size.width - GAP) break;
-        }
-
-        layerTopY = Math.max(layerTopY, y + shelfHeight);
-        anyRow = true;
-      }
-
-      if(!anyRow) break; // tidak ada progress di layer ini
-      y = layerTopY;
-      if(y > size.height - GAP) break;
-    }
-
-    // tally gagal
-    for(const it of items){
-      if(it.qty>0){
-        failedMap[it.key] = (failedMap[it.key]||0) + it.qty;
-        countFailed += it.qty;
-      }
-    }
-
-    return { drawn, countPlaced, countFailed };
+    // pos = {x,y,z} dari sudut kiri-depan-bawah kontainer
+    box.position.set(pos.x + dim.l/2 + xOffset, pos.y + dim.h/2, pos.z + dim.w/2);
+    withOutline(box, 0x111111);
+    mainGroup.add(box);
   }
 
-  // ---- Row mixing untuk 1 tipe item (uji kombinasi 1-4 orientasi, bounded qty) ----
-  function bestRowMixWidthForItem(rotations, widthAvail, heightAvail, qtyAvail){
-    // unique rotasi by (w,h,l), lalu sort dari w besar → kecil (biar kombinasi cepat mengisi)
-    const uniq = new Map();
-    for(const r of rotations){
-      const k = `${r.l}|${r.w}|${r.h}`;
-      if(!uniq.has(k)) uniq.set(k,r);
-    }
-    const rots = [...uniq.values()].filter(r => r.h + GAP <= heightAvail && r.w + GAP <= widthAvail)
-                                   .sort((a,b)=> (b.w - a.w) || (a.h - b.h));
-    if(!rots.length) return null;
-
-    // ambil maksimum 4 orientasi paling berguna untuk membatasi ledakan kombinasi
-    const tiles = rots.slice(0,4).map(r => ({ rot: r, tile: r.w + GAP }));
-
-    let best = null;
-
-    // batas count per orientasi di lebar sisa
-    const maxCountFor = (tile) => Math.max(0, Math.floor((widthAvail + GAP) / tile));
-
-    // helper register
-    function register(cols){
-      if(!cols.length) return;
-      const used = cols.reduce((s,c)=> s + (c.rot.w + GAP), 0);
-      if(used > widthAvail + 1e-6) return;
-      const rowHeight = Math.max(...cols.map(c=>c.rot.h));
-      if(rowHeight + GAP > heightAvail) return;
-
-      const leftover = widthAvail - used;
-      const score = used - leftover*10 - rowHeight*0.001;
-      if(!best || score > best.score){
-        best = { cols, usedWidth: used, leftover, rowHeight, score };
-      }
-    }
-
-    // 1 orientasi
-    for(let i=0;i<tiles.length;i++){
-      const t1 = tiles[i];
-      const c1max = Math.min(maxCountFor(t1.tile), qtyAvail);
-      if(c1max<=0) continue;
-      register(Array.from({length:c1max}, _=>({rot:t1.rot})));
-    }
-
-    // 2 orientasi
-    for(let i=0;i<tiles.length;i++){
-      for(let j=i;j<tiles.length;j++){
-        const t1=tiles[i], t2=tiles[j];
-        const c1max = Math.min(maxCountFor(t1.tile), qtyAvail);
-        for(let c1=c1max;c1>=0;c1--){
-          const used1 = c1*t1.tile; if(used1>widthAvail) continue;
-          const r1 = widthAvail - used1;
-          const c2 = Math.min(Math.floor(r1/t2.tile), Math.max(0, qtyAvail - c1));
-          if(c2<0) continue;
-          register([
-            ...Array.from({length:c1}, _=>({rot:t1.rot})),
-            ...Array.from({length:c2}, _=>({rot:t2.rot}))
-          ]);
-        }
-      }
-    }
-
-    // 3 orientasi
-    for(let i=0;i<tiles.length;i++){
-      for(let j=i;j<tiles.length;j++){
-        for(let k=j;k<tiles.length;k++){
-          const t1=tiles[i], t2=tiles[j], t3=tiles[k];
-          const c1max = Math.min(maxCountFor(t1.tile), qtyAvail);
-          for(let c1=c1max;c1>=0;c1--){
-            const used1 = c1*t1.tile; if(used1>widthAvail) continue;
-            const r1 = widthAvail - used1;
-            const c2max = Math.min(Math.floor(r1/t2.tile), Math.max(0, qtyAvail - c1));
-            for(let c2=c2max;c2>=0;c2--){
-              const used2 = used1 + c2*t2.tile; if(used2>widthAvail) continue;
-              const r2 = widthAvail - used2;
-              const c3 = Math.min(Math.floor(r2/t3.tile), Math.max(0, qtyAvail - c1 - c2));
-              if(c3<0) continue;
-              register([
-                ...Array.from({length:c1}, _=>({rot:t1.rot})),
-                ...Array.from({length:c2}, _=>({rot:t2.rot})),
-                ...Array.from({length:c3}, _=>({rot:t3.rot}))
-              ]);
-            }
-          }
-        }
-      }
-    }
-
-    // 4 orientasi (opsional, dibatasi agar tidak meledak)
-    if(tiles.length>=4){
-      const t = tiles;
-      // heuristik: coba hanya kombinasi yang jumlah total kolom <= 12 biar aman
-      const lim = 12;
-      for(let a=0;a<=Math.min(maxCountFor(t[0].tile), qtyAvail);a++){
-        const usedA = a*t[0].tile; if(usedA>widthAvail) break;
-        for(let b=0;b<=Math.min(Math.floor((widthAvail-usedA)/t[1].tile), qtyAvail-a);b++){
-          const usedB = usedA + b*t[1].tile; if(usedB>widthAvail) break;
-          for(let c=0;c<=Math.min(Math.floor((widthAvail-usedB)/t[2].tile), qtyAvail-a-b);c++){
-            const usedC = usedB + c*t[2].tile; if(usedC>widthAvail) break;
-            const remW = widthAvail - usedC;
-            const d = Math.min(Math.floor(remW/t[3].tile), Math.max(0, qtyAvail-a-b-c));
-            const totalCols = a+b+c+d;
-            if(totalCols===0 || totalCols>lim) continue;
-            register([
-              ...Array.from({length:a}, _=>({rot:t[0].rot})),
-              ...Array.from({length:b}, _=>({rot:t[1].rot})),
-              ...Array.from({length:c}, _=>({rot:t[2].rot})),
-              ...Array.from({length:d}, _=>({rot:t[3].rot}))
-            ]);
-          }
-        }
-      }
-    }
-
-    // fallback greedy bila tak ada kombinasi
-    if(!best){
-      let z=0; const greedy=[];
-      const ro = [...rots].sort((a,b)=>b.w-a.w);
-      while(z + GAP <= widthAvail){
-        const fit = ro.find(r => r.w + GAP <= (widthAvail - z) && r.h + GAP <= heightAvail);
-        if(!fit) break;
-        greedy.push({rot:fit}); z += fit.w + GAP;
-      }
-      if(greedy.length){
-        const used = greedy.reduce((s,c)=> s + (c.rot.w + GAP), 0);
-        best = { cols: greedy, usedWidth: used, leftover: widthAvail-used, rowHeight: Math.max(...greedy.map(c=>c.rot.h)), score: used };
-      }
-    }
-    return best;
-  }
-
-  // ------------------ HELPERS ------------------
-  function vol(d){ return (d.l||d.length)*(d.w||d.width)*(d.h||d.height); }
   function getAllRotations(dim){
     const L = dim.length ?? dim.l, W = dim.width ?? dim.w, H = dim.height ?? dim.h;
     const perms = [
@@ -418,18 +132,14 @@
       {l:W,w:L,h:H},{l:W,w:H,h:L},
       {l:H,w:L,h:W},{l:H,w:W,h:L}
     ];
-    // Unik & sort: tinggi kecil → besar, footprint besar → kecil
     const uniq = new Set(); const out=[];
     for(const p of perms){ const k=`${p.l}|${p.w}|${p.h}`; if(!uniq.has(k)){ uniq.add(k); out.push(p); } }
+    // preferensi: tinggi kecil dulu, lalu alas besar
     out.sort((a,b)=> (a.h-b.h) || ((b.l*b.w)-(a.l*a.w)) );
     return out;
   }
-  function colorFromKey(key){
-    // simple deterministic color
-    let h=0; for(let i=0;i<key.length;i++) h=(h*31 + key.charCodeAt(i))>>>0;
-    const r=(h&255), g=((h>>8)&255), b=((h>>16)&255);
-    return `#${r.toString(16).padStart(2,'0')}${g.toString(16).padStart(2,'0')}${b.toString(16).padStart(2,'0')}`;
-  }
+
+  function vol(d){ return (d.l||d.length)*(d.w||d.width)*(d.h||d.height); }
 
   // ------------------ CONTAINER WIREFRAME ------------------
   function drawContainerWireframe(type, index){
@@ -440,7 +150,7 @@
     const edges    = new THREE.EdgesGeometry(geometry);
     const line     = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: 0x000000 }));
 
-    const xOffset = index===0 ? 0 : containerOffsets[index-1] + containerSizeMap[data[index-1].type].length + 500;
+    const xOffset = index===0 ? 0 : containerOffsets[index-1] + containerSizeMap[data[index-1].type].length + CONTAINER_SPACING;
     containerOffsets[index] = xOffset + size.length;
 
     line.position.set(xOffset + size.length/2, size.height/2, size.width/2);
@@ -452,6 +162,170 @@
     mainGroup.add(gridHelper);
 
     return { xOffset, size };
+  }
+
+  // ------------------ PACKING: Guillotine + Grid (multi-item) ------------------
+  // Mengisi ruang kosong secara bertahap:
+  // 1) Pilih space paling “bawah-depan-kiri” (prioritas Y, lalu X, lalu Z) agar rapi.
+  // 2) Untuk space itu, cari item+rotasi yang paling efektif (maks blok terpasang).
+  // 3) Tempatkan dalam grid (nx,ny,nz) sebanyak mungkin sesuai qty.
+  // 4) Pecah space jadi right/front/top (guillotine) supaya item lain lanjut dari sisa titik itu.
+  function packOneContainer(containerObj, index, reportLines){
+    const { xOffset, size } = drawContainerWireframe(containerObj.type, index);
+
+    // Normalisasi & urutkan item by volume desc (supaya besar dipertimbangkan dulu)
+    const items = containerObj.items.map((it, idx)=>({
+      ...it,
+      qty: +it.qty || 0,
+      key: `${it.model || 'Item'} ${it.size ?? ''}" (C${index+1}-L${idx+1})`,
+      dim: { l:(it.dimensions.l ?? it.dimensions.length), w:(it.dimensions.w ?? it.dimensions.width), h:(it.dimensions.h ?? it.dimensions.height) }
+    })).filter(i=>i.qty>0);
+
+    // Kalau tidak ada item, tetap catat report
+    if(!items.length){
+      reportLines.push(`C${index+1} [${containerObj.type}] — Placed: 0 | Failed: 0`);
+      return {placed:0, failed:0, failedMap:{}};
+    }
+
+    items.sort((a,b)=> vol(b.dim) - vol(a.dim));
+
+    // Ruang awal = seluruh isi kontainer
+    let spaces = [{ x:0, y:0, z:0, l:size.length, h:size.height, w:size.width }];
+
+    // Prioritas space: paling bawah, lalu paling depan (X kecil), lalu paling kiri (Z kecil)
+    const spaceSort = (a,b)=> (a.y-b.y) || (a.x-b.x) || (a.z-b.z);
+
+    // Hitung kapasitas blok dalam 1 space untuk rotasi r
+    function blockCapacityInSpace(s, r){
+      const nx = Math.floor((s.l + LOGIC_GAP) / (r.l + LOGIC_GAP));
+      const ny = Math.floor((s.h + LOGIC_GAP) / (r.h + LOGIC_GAP));
+      const nz = Math.floor((s.w + LOGIC_GAP) / (r.w + LOGIC_GAP));
+      return { nx, ny, nz, count: Math.max(0, nx*ny*nz) };
+    }
+
+    // Heuristik pemilihan (item, rotasi, space): memaksimalkan jumlah yang bisa ditempatkan pada space itu.
+    function chooseBest(space){
+      let best = null;
+      for(let i=0;i<items.length;i++){
+        const it = items[i]; if(it.qty<=0) continue;
+        const rots = getAllRotations(it.dim);
+
+        for(const r of rots){
+          if(r.l<=0||r.w<=0||r.h<=0) continue;
+          if(r.l > space.l || r.w > space.w || r.h > space.h) continue;
+
+          const cap = blockCapacityInSpace(space, r);
+          if(cap.count<=0) continue;
+
+          // Skor: utamakan count tinggi, lalu “kepadatan volume” yang digunakan
+          const usedVol = (cap.count * r.l * r.w * r.h);
+          const spaceVol = space.l * space.w * space.h;
+          const density = usedVol / spaceVol;
+
+          const score = cap.count * 1e6 + density; // bobot besar untuk count
+          if(!best || score > best.score){
+            best = { itemIndex:i, rot:r, cap, score };
+          }
+        }
+      }
+      return best;
+    }
+
+    let totalPlaced = 0;
+    const failedMap = {};
+
+    // Loop sampai tidak ada space yang bisa diisi atau semua qty habis
+    while(spaces.length){
+      spaces.sort(spaceSort);
+      const s = spaces.shift();
+
+      const pick = chooseBest(s);
+      if(!pick){
+        // Space ini tidak bisa dipakai untuk item manapun → buang
+        continue;
+      }
+
+      const it = items[pick.itemIndex];
+      const { rot, cap } = pick;
+
+      // Banyak yang benar-benar akan ditempatkan = min(qty, kapasitas blok space)
+      const toPlace = Math.min(it.qty, cap.count);
+      if(toPlace<=0){
+        // Tidak jadi menempatkan apa pun, lanjut space berikut
+        continue;
+      }
+
+      // Tempatkan blok dalam urutan Y->X->Z agar stabil
+      let placedHere = 0;
+      outer:
+      for(let y=0; y<cap.ny; y++){
+        for(let x=0; x<cap.nx; x++){
+          for(let z=0; z<cap.nz; z++){
+            if(placedHere >= toPlace) break outer;
+
+            const pos = {
+              x: s.x + x*(rot.l + LOGIC_GAP),
+              y: s.y + y*(rot.h + LOGIC_GAP),
+              z: s.z + z*(rot.w + LOGIC_GAP)
+            };
+
+            // Clamp agar tidak keluar kontainer
+            if(pos.x + rot.l > size.length || pos.y + rot.h > size.height || pos.z + rot.w > size.width){
+              continue;
+            }
+
+            addBox(rot, pos, it.color || colorFromKey(it.key), xOffset);
+            placedHere++; totalPlaced++;
+          }
+        }
+      }
+
+      // Update qty item
+      it.qty -= placedHere;
+
+      // Hitung ruang yang terpakai aktual
+      const usedL = Math.min(cap.nx * rot.l, s.l);
+      const usedH = Math.min(cap.ny * rot.h, s.h);
+      const usedW = Math.min(cap.nz * rot.w, s.w);
+
+      // Pecah sisa ruang: kanan, depan, atas
+      const right = { x:s.x + usedL, y:s.y, z:s.z, l: s.l - usedL, h: usedH, w: usedW };
+      const front = { x:s.x, y:s.y, z:s.z + usedW, l: usedL, h: usedH, w: s.w - usedW };
+      const top   = { x:s.x, y:s.y + usedH, z:s.z, l: s.l, h: s.h - usedH, w: s.w };
+
+      for(const sp of [right, front, top]){
+        if(sp.l>0 && sp.h>0 && sp.w>0) spaces.push(sp);
+      }
+
+      // Jika item ini masih sisa, akan dipertimbangkan lagi pada space berikutnya.
+      // Jika qty item habis, lanjut item lain di iterasi berikutnya.
+      const remainingAll = items.reduce((acc, t)=> acc + t.qty, 0);
+      if(remainingAll <= 0) break;
+    }
+
+    // Hitung gagal
+    let totalFailed = 0;
+    for(const it of items){
+      if(it.qty>0){
+        failedMap[it.key] = (failedMap[it.key]||0) + it.qty;
+        totalFailed += it.qty;
+      }
+    }
+
+    // Report per item (opsional, ringkas)
+    const lines = [`C${index+1} [${containerObj.type}] — Placed: ${totalPlaced} | Failed: ${totalFailed}`];
+    if(Object.keys(failedMap).length){
+      for(const [k,v] of Object.entries(failedMap)){ lines.push(`- ${k}: ${v}`); }
+    }
+    reportLines.push(lines.join('\n'));
+
+    return { placed: totalPlaced, failed: totalFailed, failedMap };
+  }
+
+  function colorFromKey(key){
+    let h=0; for(let i=0;i<key.length;i++) h=(h*31 + key.charCodeAt(i))>>>0;
+    const r=(h&255), g=((h>>8)&255), b=((h>>16)&255);
+    return `#${r.toString(16).padStart(2,'0')}${g.toString(16).padStart(2,'0')}${b.toString(16).padStart(2,'0')}`;
   }
 
   // ------------------ UI BUILDERS ------------------
@@ -471,6 +345,7 @@
   }
 
   function buildReport(stats){
+    // stats: array {containerIndex,type,placed,failed,failedMap}
     let html='';
     stats.forEach(s=>{
       html += `
@@ -482,6 +357,71 @@ ${Object.keys(s.failedMap).length ? '\nFailed detail:\n' + Object.entries(s.fail
       `;
     });
     return html;
+  }
+
+  // ------------------ CORE RENDER ------------------
+  function drawFromCache(boxes, containers, stats, payload){
+    clearScene(); containerOffsets = [];
+    containers.forEach((c,i)=> drawContainerWireframe(c.type, i));
+    // Render box yang sudah disimpan
+    for(const d of boxes){
+      addBox({l:d.l, h:d.h, w:d.w}, {x:d.x, y:d.y, z:d.z}, d.color, d.xOffset);
+    }
+    document.getElementById('containerList').innerHTML = buildSidebar(payload);
+    document.getElementById('reportContainer').innerHTML = buildReport(stats);
+  }
+
+  function renderFromData(payload, {useCache=ENABLE_CACHE}={}){
+    const reportEl = document.getElementById('reportContainer');
+    const listEl   = document.getElementById('containerList');
+
+    const hash = hashPayload(payload);
+    const cacheKey = `cachedBoxes_${hash}`;
+    if(useCache){
+      const cached = localStorage.getItem(cacheKey);
+      if(cached){
+        const parsed = JSON.parse(cached);
+        drawFromCache(parsed.boxes, parsed.containers, parsed.stats, payload);
+        return;
+      }
+    }
+
+    clearScene(); reportEl.innerHTML=''; listEl.innerHTML='';
+    data = payload; containerOffsets = [];
+
+    const allBoxesForCache = [];  // simpan posisi absolut untuk cache (per box)
+    const globalStats = [];
+    const perContainerReport = [];
+
+    // Hook addBox untuk penulisan cache
+    const _addBox = addBox;
+    addBox = function(dim, pos, color, xOffset){
+      _addBox(dim, pos, color, xOffset);
+      allBoxesForCache.push({ l:dim.l, h:dim.h, w:dim.w, x:pos.x, y:pos.y, z:pos.z, color, xOffset });
+    };
+
+    payload.forEach((containerObj, cIndex) => {
+      const result = packOneContainer(containerObj, cIndex, perContainerReport);
+      globalStats.push({
+        containerIndex: cIndex+1,
+        type: containerObj.type,
+        placed: result.placed,
+        failed: result.failed,
+        failedMap: result.failedMap
+      });
+    });
+
+    // Kembalikan addBox asli agar tidak double-log bila dipakai lagi
+    addBox = _addBox;
+
+    localStorage.setItem(cacheKey, JSON.stringify({
+      boxes: allBoxesForCache,
+      containers: payload.map(p=>({type:p.type})),
+      stats: globalStats
+    }));
+
+    listEl.innerHTML = buildSidebar(payload);
+    reportEl.innerHTML = buildReport(globalStats);
   }
 
   // ------------------ MESSAGE & DUMMY ------------------
@@ -496,17 +436,21 @@ ${Object.keys(s.failedMap).length ? '\nFailed detail:\n' + Object.entries(s.fail
   document.getElementById('btnClearCache').addEventListener('click', ()=>{ localStorage.clear(); alert('Cache cleared'); });
 
   function renderDummy(){
-    // Contoh kasus umum (bisa mencapai pola 3V+1H bila optimal),
-    // silakan ubah dimensi/qty sesuai real case-mu.
+    // Contoh: multi-container + multi-item berbeda dimensi
     const dummyPayload = [
       {
         type: '40FT (HQ)',
         items: [
-          // Dimensi contoh: 600 x 400 x 300 (mm)
-          // Qty lebih besar dari muatan supaya algoritma memaksimalkan sampai penuh
-          { model: 'FQ803', size: 24, qty: 800, dimensions: { l: 600, w: 400, h: 300 }, color: '#F472B6' },
-          // Item lain (opsional) untuk uji multi-tipe
-          { model: 'Addon', size: 22, qty: 50, dimensions: { l: 500, w: 500, h: 300 }, color: '#60A5FA' }
+          { model: 'FQ803', size: 24, qty: 220, dimensions: { l: 600, w: 400, h: 300 }, color: '#F472B6' },
+          { model: 'Addon', size: 22, qty: 120, dimensions: { l: 500, w: 500, h: 300 }, color: '#60A5FA' },
+          { model: 'Tall',  size: 30, qty:  60, dimensions: { l: 400, w: 400, h: 500 }, color: '#34D399' }
+        ]
+      },
+      {
+        type: '20FT (GP)',
+        items: [
+          { model: 'Small', size: 16, qty: 300, dimensions: { l: 300, w: 250, h: 200 }, color: '#F59E0B' },
+          { model: 'Mix2',  size: 21, qty: 120, dimensions: { l: 420, w: 260, h: 260 }, color: '#A78BFA' }
         ]
       }
     ];
@@ -514,6 +458,7 @@ ${Object.keys(s.failedMap).length ? '\nFailed detail:\n' + Object.entries(s.fail
   }
 
   window.addEventListener('DOMContentLoaded', ()=>{
+    // Auto demo kalau dibuka langsung (bukan di dalam iframe Index)
     if(window.top === window.self) renderDummy();
   });
 
